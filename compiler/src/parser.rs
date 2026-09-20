@@ -35,8 +35,26 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Fn => self.parse_function().map(Item::Function),
             TokenKind::Struct => self.parse_struct().map(Item::Struct),
+            TokenKind::Identifier if self.peek().lexeme == "impl" => self.parse_impl().map(Item::Impl),
             _ => Err(self.error_here("expected fn or struct")),
         }
+    }
+
+    fn parse_impl(&mut self) -> Result<ImplBlock, ParseError> {
+        self.expect_identifier("expected impl")?;
+        let type_name = self.expect_identifier("expected type name after impl")?;
+        self.skip_newlines();
+        self.expect(TokenKind::LeftBrace, "expected { after impl type")?;
+        self.skip_newlines();
+
+        let mut methods = Vec::new();
+        while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+            methods.push(self.parse_function()?);
+            self.skip_newlines();
+        }
+
+        self.expect(TokenKind::RightBrace, "expected } after impl block")?;
+        Ok(ImplBlock { type_name, methods })
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {
@@ -207,7 +225,17 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<TypeRef, ParseError> {
-        Ok(TypeRef { name: self.expect_identifier("expected type name")? })
+        let reference = if self.match_kind(TokenKind::Ampersand) {
+            if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+                self.advance();
+                ReferenceKind::Mutable
+            } else {
+                ReferenceKind::Shared
+            }
+        } else {
+            ReferenceKind::Value
+        };
+        Ok(TypeRef { name: self.expect_identifier("expected type name")?, reference })
     }
 
     fn parse_expression(&mut self) -> Result<Expr, ParseError> { self.parse_assignment() }
@@ -292,6 +320,14 @@ impl Parser {
                     self.expect(TokenKind::RightParen, "expected ) after arguments")?;
                     expr = Expr::Call { callee: Box::new(expr), args };
                 }
+                TokenKind::LeftBracket => {
+                    self.advance();
+                    self.skip_newlines();
+                    let index = self.parse_expression()?;
+                    self.skip_newlines();
+                    self.expect(TokenKind::RightBracket, "expected ] after index")?;
+                    expr = Expr::Index { object: Box::new(expr), index: Box::new(index) };
+                }
                 TokenKind::Dot => {
                     self.advance();
                     let name = self.expect_identifier("expected member name after dot")?;
@@ -319,7 +355,14 @@ impl Parser {
             TokenKind::String => Ok(Expr::Literal(Literal::String(token.lexeme))),
             TokenKind::True => Ok(Expr::Literal(Literal::Bool(true))),
             TokenKind::False => Ok(Expr::Literal(Literal::Bool(false))),
-            TokenKind::Identifier => Ok(Expr::Identifier(token.lexeme)),
+            TokenKind::Identifier => {
+                if self.check(TokenKind::LeftBrace) {
+                    self.parse_struct_literal(token.lexeme)
+                } else {
+                    Ok(Expr::Identifier(token.lexeme))
+                }
+            }
+            TokenKind::LeftBracket => self.parse_array_literal(),
             TokenKind::LeftParen => {
                 self.skip_newlines();
                 let expr = self.parse_expression()?;
@@ -329,6 +372,42 @@ impl Parser {
             }
             _ => Err(ParseError { message: "expected expression".into(), span: token.span }),
         }
+    }
+
+    fn parse_struct_literal(&mut self, name: String) -> Result<Expr, ParseError> {
+        self.expect(TokenKind::LeftBrace, "expected { in struct literal")?;
+        self.skip_newlines();
+        let mut fields = Vec::new();
+
+        while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+            let field = self.expect_identifier("expected field name")?;
+            self.expect(TokenKind::Colon, "expected : after field name")?;
+            let value = self.parse_expression()?;
+            fields.push((field, value));
+            self.skip_newlines();
+            if !self.match_kind(TokenKind::Comma) { break; }
+            self.skip_newlines();
+        }
+
+        self.expect(TokenKind::RightBrace, "expected } after struct literal")?;
+        Ok(Expr::StructLiteral { name, fields })
+    }
+
+    fn parse_array_literal(&mut self) -> Result<Expr, ParseError> {
+        self.skip_newlines();
+        let mut elements = Vec::new();
+
+        if !self.check(TokenKind::RightBracket) {
+            loop {
+                elements.push(self.parse_expression()?);
+                self.skip_newlines();
+                if !self.match_kind(TokenKind::Comma) { break; }
+                self.skip_newlines();
+            }
+        }
+
+        self.expect(TokenKind::RightBracket, "expected ] after array literal")?;
+        Ok(Expr::Array(elements))
     }
 
     fn consume_statement_terminator(&mut self) -> Result<(), ParseError> {
