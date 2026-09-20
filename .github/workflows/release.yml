@@ -38,17 +38,20 @@ jobs:
         shell: pwsh
         run: choco install llvm -y
 
-      - name: Build RCL
-        run: cargo build --release --package rcl --target ${{ matrix.target }}
+      - name: Build RCL and bundled runtime
+        run: |
+          cargo build --release --package rcl --package rcl-runtime --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package compiler and runtime
         shell: bash
         run: |
           mkdir -p dist
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/rcl_runtime.lib"
           else
             cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/librcl_runtime.a" "dist/librcl_runtime.a"
           fi
 
       - uses: actions/upload-artifact@v4
