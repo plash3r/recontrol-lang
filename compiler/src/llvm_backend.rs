@@ -188,11 +188,11 @@ impl<'a> Cx<'a> {
         }
         let text=rendered.join(", ");
         if ret==Type::Unit {
-            Ok(format!("{prelude}  call void @{name}({text})\\n"))
+            Ok(format!("{prelude}  call void @{name}({text})\n"))
         }
         else {
             let t=self.tmp();
-            Ok(format!("{prelude}%{t} = call {} @{name}({text})\\n",llvm_type(&ret)))
+            Ok(format!("{prelude}%{t} = call {} @{name}({text})\n",llvm_type(&ret)))
         }
     }
 
