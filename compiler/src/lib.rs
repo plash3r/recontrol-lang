@@ -4,6 +4,7 @@ pub mod borrowck;
 pub mod ownership;
 pub mod diagnostics;
 pub mod lexer;
+pub mod mir;
 pub mod parser;
 pub mod sema;
 pub mod types;
