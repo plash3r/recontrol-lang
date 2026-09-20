@@ -49,7 +49,6 @@ impl LlvmBackend {
         }
         if !functions.is_empty() { module.push('\n'); }
         module.push_str(&functions);
-        module.push_str(&entrypoint_ir());
         Ok(module)
     }
 }
@@ -292,19 +291,6 @@ fn llvm_type(t:&Type)->String { match t {
     Type::Unit=>"void",Type::Named(n)=>return format!("%\"{}\" ",n).trim_end().to_string(),Type::Array(_)|Type::Unknown=>"ptr"
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
-#[cfg(target_os = "linux")]
-fn entrypoint_ir() -> String {
-    "\ndeclare void @exit(i32)\ndefine void @_start() {\nentry:\n  call void @main()\n  call void @exit(i32 0)\n  unreachable\n}\n".into()
-}
-
-#[cfg(windows)]
-fn entrypoint_ir() -> String {
-    "\ndeclare void @ExitProcess(i32)\ndefine void @mainCRTStartup() {\nentry:\n  call void @main()\n  call void @ExitProcess(i32 0)\n  unreachable\n}\n".into()
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn entrypoint_ir() -> String { String::new() }
-
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }
 
 #[cfg(test)]
