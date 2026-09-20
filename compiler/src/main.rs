@@ -5,7 +5,8 @@ use std::process::Command;
 
 use rcl::borrowck::BorrowChecker;
 use rcl::hir::HirLowerer;
-use rcl::llvm_backend::LlvmBackend;\nuse rcl::native_backend::NativeBackend;
+use rcl::llvm_backend::LlvmBackend;
+use rcl::native_backend::NativeBackend;
 use rcl::mir::MirLowerer;
 use rcl::mir_borrow::MirBorrowAnalyzer;
 use rcl::mir_move::MirMoveAnalyzer;
@@ -60,7 +61,22 @@ fn build_llvm(source: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-fn build_native(source: &str) -> Result<PathBuf, String> {\n    let mir = check_source(source)?;\n    let bytes = NativeBackend::emit(&mir)\n        .map_err(|e| format_errors(e.into_iter().map(|x| format!("{}: {}", x.function, x.message)).collect()))?;\n    let out = executable_path(source);\n    fs::write(&out, bytes).map_err(|e| format!("rcl: cannot write {}: {e}", out.display()))?;\n    #[cfg(unix)] {\n        use std::os::unix::fs::PermissionsExt;\n        let mut p = fs::metadata(&out).map_err(|e| format!("rcl: cannot stat {}: {e}", out.display()))?.permissions();\n        p.set_mode(0o755);\n        fs::set_permissions(&out, p).map_err(|e| format!("rcl: cannot chmod {}: {e}", out.display()))?;\n    }\n    Ok(out)\n}\n\nfn new_project(name: &str) -> Result<(), String> {
+fn build_native(source: &str) -> Result<PathBuf, String> {
+    let mir = check_source(source)?;
+    let bytes = NativeBackend::emit(&mir)
+        .map_err(|e| format_errors(e.into_iter().map(|x| format!("{}: {}", x.function, x.message)).collect()))?;
+    let out = executable_path(source);
+    fs::write(&out, bytes).map_err(|e| format!("rcl: cannot write {}: {e}", out.display()))?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        let mut p = fs::metadata(&out).map_err(|e| format!("rcl: cannot stat {}: {e}", out.display()))?.permissions();
+        p.set_mode(0o755);
+        fs::set_permissions(&out, p).map_err(|e| format!("rcl: cannot chmod {}: {e}", out.display()))?;
+    }
+    Ok(out)
+}
+
+fn new_project(name: &str) -> Result<(), String> {
     let root = Path::new(name);
     if root.exists() { return Err(format!("rcl: directory already exists: {}", root.display())); }
 
