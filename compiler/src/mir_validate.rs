@@ -153,7 +153,7 @@ pub fn build_cfg(function: &MirFunction) -> LocalFlow {
         let next = match block.terminator {
             Terminator::Goto(t) => vec![t],
             Terminator::SwitchBool { then_block, else_block, .. } => vec![then_block, else_block],
-            Terminator::Return | Terminator::Unreachable => Vec::new(),
+            Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
         };
         successors.insert(block.id, next.clone());
         for target in next {
