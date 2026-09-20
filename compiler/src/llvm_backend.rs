@@ -159,6 +159,9 @@ impl<'a> Cx<'a> {
     fn call(&mut self, callee: &Operand, args: &[Operand]) -> Result<String, Vec<CodegenError>> {
         let Operand::Function(id)=callee else { return self.err_result("indirect calls are not yet supported"); };
         let (name,ret,params)=self.signature(*id)?;
+        if (*id==BUILTIN_PRINT_ID || *id==BUILTIN_PRINTLN_ID) && (args.len()!=1 || self.operand_type(&args[0])? != Type::Str) {
+            return self.err_result("print/println currently require a str argument");
+        }
         let mut rendered=Vec::new();
         for (i,a) in args.iter().enumerate() {
             let v=self.operand(a)?; let ty=params.get(i).cloned().unwrap_or(self.operand_type(a)?);
@@ -254,7 +257,7 @@ impl<'a> Cx<'a> {
 
     fn intern_string(&mut self,bytes:Vec<u8>)->String {
         if let Some((n,_))=self.strings.iter().find(|(_,b)|*b==bytes) { return n.clone(); }
-        let n=format!("@.str.{}",self.strings.len()); self.strings.push((n.clone(),bytes)); n
+        let mut n="@.str.".to_string(); for b in &bytes { write!(n,"{:02X}",b).unwrap(); } self.strings.push((n.clone(),bytes)); n
     }
 
     fn tmp(&mut self)->usize { let n=self.next; self.next+=1; n }
