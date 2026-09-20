@@ -27,6 +27,7 @@ impl MirValidator {
             if block.id >= count {
                 errors.push(Self::error(function, format!("invalid basic block {}", block.id)));
             }
+
             let check_target = |target: BasicBlockId, errors: &mut Vec<MirError>| {
                 if target >= count {
                     errors.push(Self::error(function, format!("invalid CFG target {}", target)));
@@ -38,9 +39,13 @@ impl MirValidator {
                 Terminator::SwitchBool { then_block, else_block, condition } => {
                     check_target(*then_block, &mut errors);
                     check_target(*else_block, &mut errors);
-                    Self::validate_operand(function, condition, &local_ids, &mut errors);
+                    Self::validate_operand_shape(function, condition, &local_ids, &mut errors);
                 }
-                Terminator::Return(value) => { if let Some(value) = value { Self::validate_rvalue(function, value, &local_ids, &mut errors); } }
+                Terminator::Return(value) => {
+                    if let Some(value) = value {
+                        Self::validate_rvalue_shape(function, value, &local_ids, &mut errors);
+                    }
+                }
                 Terminator::Unreachable => {}
             }
 
@@ -50,15 +55,17 @@ impl MirValidator {
                         Self::check_local(function, *id, &local_ids, &mut errors);
                     }
                     MirStatement::Assign { place, rvalue } => {
-                        Self::validate_place(function, place, &local_ids, &mut errors);
-                        Self::validate_rvalue(function, rvalue, &local_ids, &mut errors);
+                        Self::validate_place_shape(function, place, &local_ids, &mut errors);
+                        Self::validate_rvalue_shape(function, rvalue, &local_ids, &mut errors);
                     }
                     MirStatement::Evaluate(rvalue) => {
-                        Self::validate_rvalue(function, rvalue, &local_ids, &mut errors);
+                        Self::validate_rvalue_shape(function, rvalue, &local_ids, &mut errors);
                     }
                 }
             }
         }
+
+        errors.extend(Self::validate_storage_lifetimes(function, &local_ids));
 
         let reachable = Self::reachable(function);
         for block in &function.blocks {
@@ -70,41 +77,297 @@ impl MirValidator {
         errors
     }
 
-    fn validate_rvalue(function: &MirFunction, value: &Rvalue, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
-        match value {
-            Rvalue::Use(op) | Rvalue::Unary { operand: op, .. } => Self::validate_operand(function, op, locals, errors),
-            Rvalue::Binary { left, right, .. } => {
-                Self::validate_operand(function, left, locals, errors);
-                Self::validate_operand(function, right, locals, errors);
+    fn validate_storage_lifetimes(
+        function: &MirFunction,
+        local_ids: &HashSet<usize>,
+    ) -> Vec<MirError> {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum StorageState {
+            Dead,
+            Live,
+            Maybe,
+        }
+
+        fn merge(states: &[StorageState]) -> StorageState {
+            if states.is_empty() || states.iter().all(|s| *s == StorageState::Dead) {
+                StorageState::Dead
+            } else if states.iter().all(|s| *s == StorageState::Live) {
+                StorageState::Live
+            } else {
+                StorageState::Maybe
             }
-            Rvalue::Ref { place, .. } => Self::validate_place(function, place, locals, errors),
+        }
+
+        fn transfer(
+            function: &MirFunction,
+            block: &crate::mir::BasicBlock,
+            mut state: HashMap<usize, StorageState>,
+            validate: bool,
+            errors: &mut Vec<MirError>,
+            local_ids: &HashSet<usize>,
+        ) -> HashMap<usize, StorageState> {
+            let mut check_live = |id: usize, what: &str| {
+                if !local_ids.contains(&id) {
+                    return;
+                }
+                if validate && state.get(&id).copied().unwrap_or(StorageState::Dead) != StorageState::Live {
+                    errors.push(MirValidator::error(
+                        function,
+                        format!("use of local {} while storage is not definitely live ({})", id, what),
+                    ));
+                }
+            };
+
+            let mut check_place = |place: &Place, write_root: bool| {
+                match place {
+                    Place::Local(id) => {
+                        if !write_root {
+                            check_live(*id, "place read");
+                        } else if validate
+                            && state.get(id).copied().unwrap_or(StorageState::Dead) != StorageState::Live
+                        {
+                            errors.push(MirValidator::error(
+                                function,
+                                format!("assignment to local {} while storage is not live", id),
+                            ));
+                        }
+                    }
+                    Place::Field { base, .. } => check_place(base, false),
+                    Place::Index { base, index } => {
+                        check_place(base, false);
+                        check_operand(index);
+                    }
+                }
+            };
+
+            let mut check_operand = |operand: &Operand| {
+                match operand {
+                    Operand::Copy(place) | Operand::Move(place) => check_place(place, false),
+                    Operand::Constant(_) | Operand::Function(_) => {}
+                }
+            };
+
+            let mut check_rvalue = |value: &Rvalue| {
+                match value {
+                    Rvalue::Use(op) | Rvalue::Unary { operand: op, .. } => check_operand(op),
+                    Rvalue::Binary { left, right, .. } => {
+                        check_operand(left);
+                        check_operand(right);
+                    }
+                    Rvalue::Ref { place, .. } => check_place(place, false),
+                    Rvalue::Call { callee, args } => {
+                        check_operand(callee);
+                        for arg in args {
+                            check_operand(arg);
+                        }
+                    }
+                    Rvalue::Aggregate { fields, .. } => {
+                        for (_, op) in fields {
+                            check_operand(op);
+                        }
+                    }
+                    Rvalue::Array(values) => {
+                        for op in values {
+                            check_operand(op);
+                        }
+                    }
+                }
+            };
+
+            for statement in &block.statements {
+                match statement {
+                    MirStatement::StorageLive(id) => {
+                        if validate && state.get(id).copied().unwrap_or(StorageState::Dead) == StorageState::Live {
+                            errors.push(MirValidator::error(
+                                function,
+                                format!("duplicate StorageLive for local {}", id),
+                            ));
+                        }
+                        state.insert(*id, StorageState::Live);
+                    }
+                    MirStatement::StorageDead(id) => {
+                        if validate && state.get(id).copied().unwrap_or(StorageState::Dead) != StorageState::Live {
+                            errors.push(MirValidator::error(
+                                function,
+                                format!("StorageDead for local {} while storage is not definitely live", id),
+                            ));
+                        }
+                        state.insert(*id, StorageState::Dead);
+                    }
+                    MirStatement::Assign { place, rvalue } => {
+                        check_place(place, true);
+                        check_rvalue(rvalue);
+                    }
+                    MirStatement::Evaluate(rvalue) => check_rvalue(rvalue),
+                }
+            }
+
+            match &block.terminator {
+                Terminator::SwitchBool { condition, .. } => check_operand(condition),
+                Terminator::Return(Some(value)) => check_rvalue(value),
+                Terminator::Goto(_) | Terminator::Return(None) | Terminator::Unreachable => {}
+            }
+
+            state
+        }
+
+        let cfg = build_cfg(function);
+        let mut in_states = HashMap::<BasicBlockId, HashMap<usize, StorageState>>::new();
+        let mut worklist = VecDeque::from([0]);
+        let mut queued = HashSet::from([0]);
+
+        while let Some(block_id) = worklist.pop_front() {
+            queued.remove(&block_id);
+            let mut incoming = HashMap::new();
+
+            if block_id != 0 {
+                if let Some(preds) = cfg.predecessors.get(&block_id) {
+                    let states = preds.iter().filter_map(|pred| in_states.get(pred)).collect::<Vec<_>>();
+                    for local in local_ids {
+                        let values = states.iter()
+                            .map(|state| state.get(local).copied().unwrap_or(StorageState::Dead))
+                            .collect::<Vec<_>>();
+                        incoming.insert(*local, merge(&values));
+                    }
+                }
+            } else {
+                for local in local_ids {
+                    incoming.insert(*local, StorageState::Dead);
+                }
+            }
+
+            let old = in_states.insert(block_id, incoming.clone());
+            let out = transfer(
+                function,
+                &function.blocks[block_id],
+                incoming,
+                false,
+                &mut Vec::new(),
+                local_ids,
+            );
+
+            let changed = old.as_ref().map(|_| {
+                let mut previous_out = HashMap::new();
+                if let Some(successors) = cfg.successors.get(&block_id) {
+                    for successor in successors {
+                        if let Some(existing) = in_states.get(successor) {
+                            previous_out.insert(*successor, existing.clone());
+                        }
+                    }
+                }
+                let _ = previous_out;
+                true
+            }).unwrap_or(true);
+
+            if changed {
+                if let Some(successors) = cfg.successors.get(&block_id) {
+                    for successor in successors {
+                        if queued.insert(*successor) {
+                            worklist.push_back(*successor);
+                        }
+                    }
+                }
+            }
+
+            // The loop above computes a monotonic storage state. A second, direct
+            // validation pass below uses the converged entry states.
+            let _ = out;
+        }
+
+        // Recompute to a fixed point using explicit out-states.
+        let mut out_states = HashMap::<BasicBlockId, HashMap<usize, StorageState>>::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in &function.blocks {
+                let mut incoming = HashMap::new();
+                if block.id == 0 {
+                    for local in local_ids {
+                        incoming.insert(*local, StorageState::Dead);
+                    }
+                } else if let Some(preds) = cfg.predecessors.get(&block.id) {
+                    for local in local_ids {
+                        let values = preds.iter()
+                            .map(|pred| out_states.get(pred)
+                                .and_then(|s| s.get(local).copied())
+                                .unwrap_or(StorageState::Dead))
+                            .collect::<Vec<_>>();
+                        incoming.insert(*local, merge(&values));
+                    }
+                }
+                let out = transfer(
+                    function,
+                    block,
+                    incoming,
+                    false,
+                    &mut Vec::new(),
+                    local_ids,
+                );
+                if out_states.get(&block.id) != Some(&out) {
+                    out_states.insert(block.id, out);
+                    changed = true;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        for block in &function.blocks {
+            let mut incoming = HashMap::new();
+            if block.id == 0 {
+                for local in local_ids {
+                    incoming.insert(*local, StorageState::Dead);
+                }
+            } else if let Some(preds) = cfg.predecessors.get(&block.id) {
+                for local in local_ids {
+                    let values = preds.iter()
+                        .map(|pred| out_states.get(pred)
+                            .and_then(|s| s.get(local).copied())
+                            .unwrap_or(StorageState::Dead))
+                        .collect::<Vec<_>>();
+                    incoming.insert(*local, merge(&values));
+                }
+            }
+            let _ = transfer(function, block, incoming, true, &mut errors, local_ids);
+        }
+
+        errors
+    }
+
+    fn validate_rvalue_shape(function: &MirFunction, value: &Rvalue, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
+        match value {
+            Rvalue::Use(op) | Rvalue::Unary { operand: op, .. } => Self::validate_operand_shape(function, op, locals, errors),
+            Rvalue::Binary { left, right, .. } => {
+                Self::validate_operand_shape(function, left, locals, errors);
+                Self::validate_operand_shape(function, right, locals, errors);
+            }
+            Rvalue::Ref { place, .. } => Self::validate_place_shape(function, place, locals, errors),
             Rvalue::Call { callee, args } => {
-                Self::validate_operand(function, callee, locals, errors);
-                for arg in args { Self::validate_operand(function, arg, locals, errors); }
+                Self::validate_operand_shape(function, callee, locals, errors);
+                for arg in args { Self::validate_operand_shape(function, arg, locals, errors); }
             }
             Rvalue::Aggregate { fields, .. } => {
-                for (_, op) in fields { Self::validate_operand(function, op, locals, errors); }
+                for (_, op) in fields { Self::validate_operand_shape(function, op, locals, errors); }
             }
             Rvalue::Array(values) => {
-                for op in values { Self::validate_operand(function, op, locals, errors); }
+                for op in values { Self::validate_operand_shape(function, op, locals, errors); }
             }
         }
     }
 
-    fn validate_operand(function: &MirFunction, operand: &Operand, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
+    fn validate_operand_shape(function: &MirFunction, operand: &Operand, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
         match operand {
-            Operand::Copy(place) | Operand::Move(place) => Self::validate_place(function, place, locals, errors),
+            Operand::Copy(place) | Operand::Move(place) => Self::validate_place_shape(function, place, locals, errors),
             Operand::Constant(_) | Operand::Function(_) => {}
         }
     }
 
-    fn validate_place(function: &MirFunction, place: &Place, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
+    fn validate_place_shape(function: &MirFunction, place: &Place, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
         match place {
             Place::Local(id) => Self::check_local(function, *id, locals, errors),
-            Place::Field { base, .. } => Self::validate_place(function, base, locals, errors),
+            Place::Field { base, .. } => Self::validate_place_shape(function, base, locals, errors),
             Place::Index { base, index } => {
-                Self::validate_place(function, base, locals, errors);
-                Self::validate_operand(function, index, locals, errors);
+                Self::validate_place_shape(function, base, locals, errors);
+                Self::validate_operand_shape(function, index, locals, errors);
             }
         }
     }
@@ -177,6 +440,10 @@ mod tests {
         MirLowerer::lower(&HirLowerer::lower(&program))
     }
 
+    fn manually_validate(function: MirFunction) -> Result<(), Vec<MirError>> {
+        MirValidator::validate(&MirProgram { functions: vec![function] })
+    }
+
     #[test]
     fn valid_mir_passes_validation() {
         let mir = lower("fn main(){let x:i32=10 println(x)}");
@@ -189,5 +456,89 @@ mod tests {
         let cfg = build_cfg(&mir.functions[0]);
         assert!(cfg.successors.get(&0).unwrap().len() == 2);
         assert!(cfg.predecessors.get(&1).is_some());
+    }
+
+    #[test]
+    fn use_before_storage_live_is_rejected() {
+        let function = MirFunction {
+            name: "bad".into(),
+            locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
+            blocks: vec![crate::mir::BasicBlock {
+                id: 0,
+                statements: vec![MirStatement::Evaluate(Rvalue::Use(Operand::Copy(Place::Local(0))))],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        assert!(manually_validate(function).is_err());
+    }
+
+    #[test]
+    fn use_after_storage_dead_is_rejected() {
+        let function = MirFunction {
+            name: "bad".into(),
+            locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
+            blocks: vec![crate::mir::BasicBlock {
+                id: 0,
+                statements: vec![
+                    MirStatement::StorageLive(0),
+                    MirStatement::StorageDead(0),
+                    MirStatement::Evaluate(Rvalue::Use(Operand::Copy(Place::Local(0)))),
+                ],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        assert!(manually_validate(function).is_err());
+    }
+
+    #[test]
+    fn double_storage_dead_is_rejected() {
+        let function = MirFunction {
+            name: "bad".into(),
+            locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
+            blocks: vec![crate::mir::BasicBlock {
+                id: 0,
+                statements: vec![MirStatement::StorageLive(0), MirStatement::StorageDead(0), MirStatement::StorageDead(0)],
+                terminator: Terminator::Return(None),
+            }],
+        };
+        assert!(manually_validate(function).is_err());
+    }
+
+    #[test]
+    fn parameter_storage_is_live_at_entry() {
+        let mir = lower("fn main(x:i32){println(x)}");
+        assert!(MirValidator::validate(&mir).is_ok());
+        assert!(matches!(mir.functions[0].blocks[0].statements.first(), Some(MirStatement::StorageLive(0))));
+    }
+
+    #[test]
+    fn branch_join_with_live_storage_passes() {
+        let function = MirFunction {
+            name: "branch".into(),
+            locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
+            blocks: vec![
+                crate::mir::BasicBlock {
+                    id: 0,
+                    statements: vec![MirStatement::StorageLive(0)],
+                    terminator: Terminator::SwitchBool { condition: Operand::Constant(crate::ast::Literal::Bool(true)), then_block: 1, else_block: 2 },
+                },
+                crate::mir::BasicBlock {
+                    id: 1,
+                    statements: vec![],
+                    terminator: Terminator::Goto(3),
+                },
+                crate::mir::BasicBlock {
+                    id: 2,
+                    statements: vec![],
+                    terminator: Terminator::Goto(3),
+                },
+                crate::mir::BasicBlock {
+                    id: 3,
+                    statements: vec![MirStatement::Evaluate(Rvalue::Use(Operand::Copy(Place::Local(0))))],
+                    terminator: Terminator::Return(None),
+                },
+            ],
+        };
+        assert!(manually_validate(function).is_ok());
     }
 }
