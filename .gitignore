@@ -1,0 +1,45 @@
+```
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Compiled binaries and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Debug and release builds
+debug/
+release/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+coverage/
+htmlcov/
+*.coverage
+
+# Cache directories
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.cargo/
+```
