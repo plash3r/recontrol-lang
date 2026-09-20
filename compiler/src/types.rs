@@ -35,6 +35,16 @@ impl Type {
         }
     }
 
+    pub fn is_copy(&self) -> bool {
+        matches!(
+            self,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::U256 |
+            Type::F32 | Type::F64 | Type::F128 | Type::Bool | Type::Char | Type::Unit |
+            Type::Reference { .. }
+        )
+    }
+
     pub fn is_integer(&self) -> bool {
         matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::U256)
