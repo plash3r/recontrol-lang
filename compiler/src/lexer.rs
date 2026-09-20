@@ -14,7 +14,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Fn, Struct, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Fn, Struct, Impl, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus,
@@ -95,19 +95,11 @@ impl<'a> Lexer<'a> {
                 ',' => tokens.push(self.token(TokenKind::Comma, ",", line, column, 1)),
                 '.' => tokens.push(self.token(TokenKind::Dot, ".", line, column, 1)),
                 ';' => tokens.push(self.token(TokenKind::Semicolon, ";", line, column, 1)),
-                c => errors.push(LexError {
-                    message: format!("unexpected character: {}", c),
-                    span: Span::new(line, column, 1),
-                }),
+                c => errors.push(LexError { message: format!("unexpected character: {}", c), span: Span::new(line, column, 1) }),
             }
         }
 
-        tokens.push(Token {
-            kind: TokenKind::Eof,
-            lexeme: String::new(),
-            span: Span::new(self.line, self.column, 0),
-        });
-
+        tokens.push(Token { kind: TokenKind::Eof, lexeme: String::new(), span: Span::new(self.line, self.column, 0) });
         if errors.is_empty() { Ok(tokens) } else { Err(errors) }
     }
 
@@ -116,10 +108,9 @@ impl<'a> Lexer<'a> {
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
             "let" => TokenKind::Let, "mut" => TokenKind::Mut, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
-            "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
+            "impl" => TokenKind::Impl, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
-            "false" => TokenKind::False, "return" => TokenKind::Return,
-            _ => TokenKind::Identifier,
+            "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
         };
         Token { kind, lexeme: text.clone(), span: Span::new(line, column, text.chars().count()) }
     }
@@ -139,45 +130,30 @@ impl<'a> Lexer<'a> {
         let mut text = String::new();
         while !self.is_at_end() && self.peek() != '"' {
             if self.peek() == '\n' {
-                return Err(LexError {
-                    message: "unterminated string literal".into(),
-                    span: Span::new(line, column, self.column.saturating_sub(column)),
-                });
+                return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
             }
             text.push(self.advance());
         }
         if self.is_at_end() {
-            return Err(LexError {
-                message: "unterminated string literal".into(),
-                span: Span::new(line, column, self.column.saturating_sub(column)),
-            });
+            return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
         }
         self.advance();
-        Ok(Token {
-            kind: TokenKind::String,
-            lexeme: text.clone(),
-            span: Span::new(line, column, text.chars().count() + 2),
-        })
+        Ok(Token { kind: TokenKind::String, lexeme: text.clone(), span: Span::new(line, column, text.chars().count() + 2) })
     }
 
     fn skip_comment(&mut self) { while !self.is_at_end() && self.peek() != '\n' { self.advance(); } }
-
     fn match_char(&mut self, expected: char) -> bool {
         if self.is_at_end() || self.peek() != expected { return false; }
         self.advance(); true
     }
-
     fn peek(&self) -> char { self.chars.get(self.current).copied().unwrap_or('\0') }
-
     fn advance(&mut self) -> char {
         let c = self.chars[self.current];
         self.current += 1;
         if c == '\n' { self.line += 1; self.column = 1; } else { self.column += 1; }
         c
     }
-
     fn is_at_end(&self) -> bool { self.current >= self.chars.len() }
-
     fn token(&self, kind: TokenKind, lexeme: &str, line: usize, column: usize, length: usize) -> Token {
         Token { kind, lexeme: lexeme.into(), span: Span::new(line, column, length) }
     }
