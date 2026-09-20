@@ -63,9 +63,33 @@ jobs:
             cp "$clang_bin" "dist/rcl-toolchain/bin/clang"
             cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
             cp -r "$llvm_root/lib/clang" dist/rcl-toolchain/lib/
-            for lib in "$llvm_root"/lib/libLLVM*.so* "$llvm_root"/lib/libclang-cpp*.so*; do
-              [[ -e "$lib" ]] && cp -a "$lib" dist/rcl-toolchain/lib/
-            done
+
+            # Bundle the non-glibc shared libraries needed by clang/LLD.
+            # This includes dependencies such as libxml2 that are not part of LLVM itself.
+            declare -A seen=()
+            copy_runtime_deps() {
+              local file="$1"
+              local dep
+              while IFS= read -r dep; do
+                [[ -z "$dep" || ! -f "$dep" ]] && continue
+                case "$(basename "$dep")" in
+                  linux-vdso.so.*|ld-linux*.so.*|libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libresolv.so.*|libutil.so.*|libcrypt.so.*)
+                    continue
+                    ;;
+                esac
+                if [[ -z "${seen[$dep]+x}" ]]; then
+                  seen["$dep"]=1
+                  cp -a "$dep" dist/rcl-toolchain/lib/
+                  copy_runtime_deps "$dep"
+                fi
+              done < <(
+                ldd "$file" 2>/dev/null |
+                  sed -n 's/.*=> ([^ ]*) (.*/\1/p; s/^\([^ ]*\.so[^ ]*\) (.*/\1/p'
+              )
+            }
+
+            copy_runtime_deps "dist/rcl-toolchain/bin/clang"
+            copy_runtime_deps "dist/rcl-toolchain/bin/ld.lld"
             (cd dist && tar -czf "rcl-toolchain-linux-x86_64.tar.gz" rcl-toolchain)
           fi
           rm -rf dist/rcl-toolchain
