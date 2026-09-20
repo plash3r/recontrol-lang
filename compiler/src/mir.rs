@@ -179,9 +179,10 @@ impl MirLowerer {
             _ => {
                 let temp = Self::new_temp(locals, expr.ty.clone());
                 builder.statement(MirStatement::StorageLive(temp));
+                let rvalue = Self::lower_rvalue(builder, locals, expr);
                 builder.statement(MirStatement::Assign {
                     place: Place::Local(temp),
-                    rvalue: Self::lower_rvalue(builder, locals, expr),
+                    rvalue,
                 });
                 Operand::Move(Place::Local(temp))
             }
@@ -248,19 +249,18 @@ impl MirLowerer {
             HirStmt::Let { local, initializer } => {
                 builder.statement(MirStatement::StorageLive(*local));
                 if let Some(value) = initializer {
+                    let rvalue = Self::lower_rvalue(builder, locals, value);
                     builder.statement(MirStatement::Assign {
                         place: Place::Local(*local),
-                        rvalue: Self::lower_rvalue(builder, locals, value),
+                        rvalue,
                     });
                 }
             }
             HirStmt::Expr(expr) => {
                 if let HirExprKind::Assignment { target, op, value } = &expr.kind {
                     let rvalue = Self::lower_assignment_rvalue(builder, locals, target, *op, value);
-                    builder.statement(MirStatement::Assign {
-                        place: Self::lower_place(builder, locals, target),
-                        rvalue,
-                    });
+                    let place = Self::lower_place(builder, locals, target);
+                    builder.statement(MirStatement::Assign { place, rvalue });
                 } else if let HirExprKind::Postfix { expr: target, op } = &expr.kind {
                     let rvalue = Self::lower_postfix_rvalue(builder, locals, target, *op);
                     builder.statement(MirStatement::Assign {
