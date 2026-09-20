@@ -16,28 +16,6 @@ use rcl::ownership::OwnershipChecker;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
-const RUNTIME_SOURCE: &str = r#"
-use std::ffi::CStr;
-use std::io::{self, Write};
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rcl_print(s: *const u8) {
-    if s.is_null() { return; }
-    let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
-    let text = String::from_utf8_lossy(bytes);
-    print!("{text}");
-    let _ = io::stdout().flush();
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rcl_println(s: *const u8) {
-    if s.is_null() { println!(); return; }
-    let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
-    let text = String::from_utf8_lossy(bytes);
-    println!("{text}");
-}
-"#;
-
 fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("rcl: cannot read {path}: {e}"))?;
     let tokens = Lexer::new(&source).tokenize()
@@ -80,30 +58,26 @@ fn build_llvm(source: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-fn build_runtime() -> Result<PathBuf, String> {
-    let temp = env::temp_dir();
-    let source = temp.join(format!("rcl_runtime_{}.rs", std::process::id()));
+fn runtime_library() -> Result<PathBuf, String> {
+    let exe = env::current_exe().map_err(|e| format!("rcl: cannot locate compiler executable: {e}"))?;
+    let dir = exe.parent().ok_or_else(|| "rcl: compiler has no executable directory".to_string())?;
     #[cfg(windows)]
-    let library = temp.join("rcl_runtime_rcl.lib");
+    let name = "rcl_runtime.lib";
     #[cfg(not(windows))]
-    let library = temp.join("librcl_runtime_rcl.a");
-
-    fs::write(&source, RUNTIME_SOURCE).map_err(|e| format!("rcl: cannot prepare runtime: {e}"))?;
-
-    let status = Command::new("rustc")
-        .args(["--edition", "2024", "--crate-name", "rcl_runtime", "--crate-type", "staticlib"])
-        .arg(&source).arg("-o").arg(&library).status()
-        .map_err(|e| format!("rcl: cannot execute rustc for the runtime: {e}"))?;
-
-    let _ = fs::remove_file(&source);
-    if !status.success() { return Err("rcl: failed to build the Rust runtime".into()); }
-    if !library.exists() { return Err(format!("rcl: runtime library was not produced: {}", library.display())); }
-    Ok(library)
+    let name = "librcl_runtime.a";
+    let path = dir.join(name);
+    if !path.exists() {
+        return Err(format!(
+            "rcl: bundled runtime not found: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 fn build_native(source: &str) -> Result<PathBuf, String> {
     let ll = build_llvm(source)?;
-    let runtime = build_runtime()?;
+    let runtime = runtime_library()?;
     let out = executable_path(source);
 
     let status = Command::new("clang")
