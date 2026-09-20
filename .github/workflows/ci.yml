@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test --workspace
+      - name: Check
+        run: cargo check --workspace
+
+  llvm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install LLVM toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Build LLVM IR
+        run: cargo run -p rcl -- build examples/hello.rcl
+      - name: Compile native executable
+        run: clang -x ir examples/hello.ll runtime/rcl_runtime.c -o /tmp/rcl-hello
+      - name: Run native executable
+        run: /tmp/rcl-hello
