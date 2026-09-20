@@ -57,13 +57,52 @@ fn build_llvm(source: &str) -> Result<PathBuf,String> {
     Ok(out)
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("compiler is a workspace member")
+        .to_path_buf()
+}
+
+fn runtime_library() -> PathBuf {
+    let root = workspace_root();
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let filename = if cfg!(windows) {
+        "rcl_runtime.lib"
+    } else {
+        "librcl_runtime.a"
+    };
+    root.join("target").join(profile).join(filename)
+}
+
+fn build_runtime() -> Result<PathBuf, String> {
+    let root = workspace_root();
+    let status = Command::new("cargo")
+        .current_dir(&root)
+        .args(["build", "-p", "rcl-runtime"])
+        .status()
+        .map_err(|e| format!("rcl: cannot execute cargo for runtime: {e}"))?;
+
+    if !status.success() {
+        return Err("rcl: failed to build the Rust runtime".into());
+    }
+
+    let library = runtime_library();
+    if !library.exists() {
+        return Err(format!("rcl: Rust runtime library was not produced: {}", library.display()));
+    }
+
+    Ok(library)
+}
+
 fn build_native(source: &str) -> Result<PathBuf,String> {
     let ll=build_llvm(source)?;
+    let runtime=build_runtime()?;
     let out=executable_path(source);
     let status=Command::new("clang")
         .arg("-x").arg("ir")
         .arg(&ll)
-        .arg("runtime/rcl_runtime.c")
+        .arg(&runtime)
         .arg("-o").arg(&out)
         .status()
         .map_err(|e|format!("rcl: cannot execute clang: {e}"))?;
