@@ -89,7 +89,26 @@ impl MirValidator {
         local_ids: &HashSet<usize>,
     ) -> Vec<MirError> {
         let cfg = build_cfg(function);
+        // This is a "definitely live" (must) analysis.  For a loop header,
+        // one predecessor can be the back-edge whose state depends on the header
+        // itself.  Treating an as-yet-uncomputed predecessor as Dead makes the
+        // header permanently Maybe and incorrectly rejects perfectly valid loops.
+        //
+        // Start non-entry blocks at the optimistic/top state (Live) and let the
+        // fixed-point iteration monotonically refine them.  The real function
+        // entry starts Dead, so use-before-live in the entry block is still caught.
         let mut out_states = HashMap::<BasicBlockId, HashMap<usize, StorageState>>::new();
+        for block in &function.blocks {
+            let initial = if block.id == 0 {
+                StorageState::Dead
+            } else {
+                StorageState::Live
+            };
+            out_states.insert(
+                block.id,
+                local_ids.iter().map(|id| (*id, initial)).collect(),
+            );
+        }
 
         // Fixed-point pass: compute the storage state at the end of every block.
         // At joins we keep a local Live only when every incoming path keeps it live.
