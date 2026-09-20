@@ -100,6 +100,7 @@ pub struct HirLowerer {
     structs: Vec<HirStruct>,
     scopes: Vec<HashMap<String, LocalId>>,
     function_ids: HashMap<String, FunctionId>,
+    function_returns: HashMap<FunctionId, Type>,
 }
 
 impl HirLowerer {
@@ -111,6 +112,7 @@ impl HirLowerer {
             structs: Vec::new(),
             scopes: Vec::new(),
             function_ids: HashMap::new(),
+            function_returns: HashMap::new(),
         };
 
         for item in &program.items {
@@ -118,12 +120,14 @@ impl HirLowerer {
                 ast::Item::Function(f) => {
                     let id = lowerer.next_function;
                     lowerer.function_ids.insert(f.name.clone(), id);
+                    lowerer.function_returns.insert(id, f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit));
                     lowerer.next_function += 1;
                 }
                 ast::Item::Impl(i) => {
                     for f in &i.methods {
                         let id = lowerer.next_function;
                         lowerer.function_ids.insert(f.name.clone(), id);
+                        lowerer.function_returns.insert(id, f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit));
                         lowerer.next_function += 1;
                     }
                 }
