@@ -38,8 +38,14 @@ jobs:
         shell: pwsh
         run: |
           choco install llvm -y
-          $llc = (Get-Command llc.exe -ErrorAction Stop).Source
-          $llvmBin = Split-Path -Parent $llc
+          $llc = Get-ChildItem -Path 'C:\Program Files\LLVM\bin','C:\ProgramData\chocolatey\bin' -Filter llc.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $llc) {
+            throw "LLVM llc.exe was not found after Chocolatey installation"
+          }
+          $llvmBin = $llc.DirectoryName
+          if (-not (Test-Path "$llvmBin\lld-link.exe")) {
+            throw "LLVM lld-link.exe was not found in $llvmBin"
+          }
           "LLVM_BIN=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build RCL and bundled runtime
