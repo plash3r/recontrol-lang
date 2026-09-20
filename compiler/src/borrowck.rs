@@ -314,7 +314,7 @@ impl BorrowChecker {
             };
 
             if let Type::Reference { mutable, .. } = expected {
-                let Some(name) = self.root_identifier(argument) else {
+                let Some(name) = self.borrow_target(argument) else {
                     self.error("reference arguments require a variable, field, or index expression");
                     continue;
                 };
@@ -334,6 +334,16 @@ impl BorrowChecker {
 
         for (name, kind) in temporary {
             self.remove_temporary_borrow(&name, kind);
+        }
+    }
+
+    fn borrow_target(&self, expression: &Expr) -> Option<String> {
+        match expression {
+            Expr::Unary {
+                op: UnaryOp::BorrowShared | UnaryOp::BorrowMutable,
+                expr,
+            } => self.root_identifier(expr),
+            _ => self.root_identifier(expression),
         }
     }
 
