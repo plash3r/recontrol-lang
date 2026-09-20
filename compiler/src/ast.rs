@@ -32,7 +32,7 @@ pub enum Stmt {
     Let { name: String, mutable: bool, ty: Option<TypeRef>, initializer: Option<Expr> },
     Expr(Expr),
     Return(Option<Expr>),
-    If { condition: Expr, then_branch: Block, else_branch: Option<Block> },
+    If { condition: Expr, then_branch: Block, else_branch: Option<Box<Stmt>> },
     While { condition: Expr, body: Block },
     DoWhile { body: Block, condition: Expr },
     For { initializer: Option<Box<Stmt>>, condition: Option<Expr>, update: Option<Expr>, body: Block },
@@ -45,7 +45,7 @@ pub enum Expr {
     Identifier(String),
     Unary { op: UnaryOp, expr: Box<Expr> },
     Binary { left: Box<Expr>, op: BinaryOp, right: Box<Expr> },
-    Assignment { target: Box<Expr>, value: Box<Expr> },
+    Assignment { target: Box<Expr>, op: AssignOp, value: Box<Expr> },
     Call { callee: Box<Expr>, args: Vec<Expr> },
     Member { object: Box<Expr>, name: String },
     Postfix { expr: Box<Expr>, op: PostfixOp },
@@ -69,7 +69,7 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PostfixOp { Increment, Decrement }
+pub enum PostfixOp { Increment, Decrement }\n\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum AssignOp { Assign, Add, Subtract, Multiply, Divide, Modulo }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeRef { pub name: String, pub reference: ReferenceKind }
