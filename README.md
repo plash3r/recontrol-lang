@@ -1,6 +1,6 @@
 # Recontrol Lang
 
-Recontrol Lang (RCL) 0.1.2 — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
+Recontrol Lang (RCL) 0.1.3 — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
 
 ## Install
 
@@ -40,7 +40,7 @@ rcl --version
 
 ## CLI
 
-RCL 0.1.2 releases bundle the native clang/LLD toolchain, so the compiler does not require a separately installed native compiler.
+RCL 0.1.3 releases bundle LLVM llc/LLD, so the compiler does not require clang, Cargo, or a separately installed native compiler.
 
 Once installed, Cargo is not part of the normal RCL workflow:
 
@@ -68,7 +68,7 @@ rcl --help                  Show help
 
 rcl build produces a native executable next to the source file. LLVM IR can be requested explicitly with rcl emit-llvm.
 
-The compiler ships with its native LLVM toolchain. The release installer installs RCL, its Rust runtime library, and a private clang/LLD toolchain beside it. End users do not need Rust, Cargo, clang, LLVM, or a separate C/C++ compiler to build RCL programs. The operating system still provides its normal native system libraries. No C runtime source is used.
+The compiler ships with its native LLVM code generator and linker. The release installer installs RCL, its Rust runtime library, and a private LLVM llc/LLD toolchain beside it. End users do not need Rust, Cargo, clang, or a separate C/C++ compiler to build RCL programs. The operating system still provides its normal native system libraries. No C runtime source is used.
 
 ## Development installation
 
@@ -116,7 +116,7 @@ fn main() {
 
 ## Compiler pipeline
 
-RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> bundled clang/LLD -> native executable.
+RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> bundled llc -> bundled LLD -> native executable.
 
 ## LLVM backend milestone
 
