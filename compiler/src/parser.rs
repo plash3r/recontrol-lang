@@ -35,13 +35,13 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Fn => self.parse_function().map(Item::Function),
             TokenKind::Struct => self.parse_struct().map(Item::Struct),
-            TokenKind::Identifier if self.peek().lexeme == "impl" => self.parse_impl().map(Item::Impl),
+            TokenKind::Impl => self.parse_impl().map(Item::Impl),
             _ => Err(self.error_here("expected fn or struct")),
         }
     }
 
     fn parse_impl(&mut self) -> Result<ImplBlock, ParseError> {
-        self.expect_identifier("expected impl")?;
+        self.expect(TokenKind::Impl, "expected impl")?;
         let type_name = self.expect_identifier("expected type name after impl")?;
         self.skip_newlines();
         self.expect(TokenKind::LeftBrace, "expected { after impl type")?;
