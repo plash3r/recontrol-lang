@@ -34,11 +34,12 @@ impl MirOptimizer {
         }
         for block in &mut blocks {
             block.id = map[block.id];
-            block.terminator = match block.terminator {
-                Terminator::Goto(target) => Terminator::Goto(map[target]),
+            block.terminator = match &block.terminator {
+                Terminator::Goto(target) => Terminator::Goto(map[*target]),
                 Terminator::SwitchBool { condition, then_block, else_block } =>
-                    Terminator::SwitchBool { condition, then_block: map[then_block], else_block: map[else_block] },
-                other => other,
+                    Terminator::SwitchBool { condition: condition.clone(), then_block: map[*then_block], else_block: map[*else_block] },
+                Terminator::Return(value) => Terminator::Return(value.clone()),
+                Terminator::Unreachable => Terminator::Unreachable,
             };
         }
         function.blocks = blocks;
