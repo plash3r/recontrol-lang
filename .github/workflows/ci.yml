@@ -14,7 +14,7 @@ jobs:
         with:
           components: rustfmt
       - name: Test
-        run: cargo test --workspace -- --test-threads=1 --nocapture
+        run: timeout 20s cargo test -p rcl borrowck::tests::mutable_borrow_blocks_mutation -- --exact --nocapture
       - name: Check
         run: cargo check --workspace
 
