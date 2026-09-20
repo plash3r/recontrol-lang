@@ -65,10 +65,26 @@ impl Parser {
 
         if !self.check(TokenKind::RightParen) {
             loop {
-                let param_name = self.expect_identifier("expected parameter name")?;
-                self.expect(TokenKind::Colon, "expected : after parameter name")?;
-                let ty = self.parse_type()?;
-                params.push(Parameter { name: param_name, ty });
+                if self.check(TokenKind::Ampersand) {
+                    let reference = if self.match_kind(TokenKind::Ampersand) {
+                        if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+                            self.advance();
+                            ReferenceKind::Mutable
+                        } else {
+                            ReferenceKind::Shared
+                        }
+                    } else {
+                        ReferenceKind::Value
+                    };
+                    let param_name = self.expect_identifier("expected receiver name")?;
+                    let ty = TypeRef { name: "Self".into(), reference };
+                    params.push(Parameter { name: param_name, ty });
+                } else {
+                    let param_name = self.expect_identifier("expected parameter name")?;
+                    self.expect(TokenKind::Colon, "expected : after parameter name")?;
+                    let ty = self.parse_type()?;
+                    params.push(Parameter { name: param_name, ty });
+                }
                 if !self.match_kind(TokenKind::Comma) { break; }
                 self.skip_newlines();
                 if self.check(TokenKind::RightParen) { break; }
