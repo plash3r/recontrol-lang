@@ -102,6 +102,7 @@ fn build_native(source: &str) -> Result<PathBuf,String> {
     let status=Command::new("clang")
         .arg("-x").arg("ir")
         .arg(&ll)
+        .arg("-x").arg("none")
         .arg(&runtime)
         .arg("-o").arg(&out)
         .status()
