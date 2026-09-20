@@ -178,7 +178,11 @@ impl Parser {
 
         let else_branch = if self.match_kind(TokenKind::Else) {
             self.skip_newlines();
-            Some(self.parse_block()?)
+            if self.check(TokenKind::If) {
+                Some(Box::new(self.parse_if()?))
+            } else {
+                Some(Box::new(Stmt::Block(self.parse_block()?)))
+            }
         } else { None };
 
         Ok(Stmt::If { condition, then_branch, else_branch })
@@ -258,9 +262,19 @@ impl Parser {
 
     fn parse_assignment(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_binary(0)?;
-        if self.match_kind(TokenKind::Equal) {
+        let op = match self.peek().kind {
+            TokenKind::Equal => Some(AssignOp::Assign),
+            TokenKind::PlusEqual => Some(AssignOp::Add),
+            TokenKind::MinusEqual => Some(AssignOp::Subtract),
+            TokenKind::StarEqual => Some(AssignOp::Multiply),
+            TokenKind::SlashEqual => Some(AssignOp::Divide),
+            TokenKind::PercentEqual => Some(AssignOp::Modulo),
+            _ => None,
+        };
+        if let Some(op) = op {
+            self.advance();
             let value = self.parse_assignment()?;
-            return Ok(Expr::Assignment { target: Box::new(left), value: Box::new(value) });
+            return Ok(Expr::Assignment { target: Box::new(left), op, value: Box::new(value) });
         }
         Ok(left)
     }
