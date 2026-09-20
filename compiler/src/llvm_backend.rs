@@ -247,7 +247,12 @@ impl<'a> Cx<'a> {
         Ok((llvm_name(&f.name),self.return_type_of(f),f.locals.iter().take(f.param_count).map(|l|l.ty.clone()).collect()))
     }
 
-    fn return_type(&self)->Type { self.return_type_of(self.function) }
+    fn return_type(&self)->Type {
+        let ty = self.return_type_of(self.function);
+        // A native process entry point must return an integer status code.
+        // RCL allows a unit-returning `main`, so lower that case to `i32 0`.
+        if self.function.name == "main" && ty == Type::Unit { Type::I32 } else { ty }
+    }
 
     fn return_type_of(&self,f:&MirFunction)->Type {
         for b in &f.blocks {
@@ -344,5 +349,7 @@ mod tests {
         assert!(llvm.contains("define void @main()"));
         assert!(llvm.contains("@rcl_println"));
         assert!(llvm.contains("Hello"));
+        assert!(llvm.contains("define i32 @main()"));
+        assert!(llvm.contains("ret i32 0"));
     }
 }
