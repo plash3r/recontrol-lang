@@ -615,6 +615,9 @@ mod tests {
         assert!(mir.functions[0].blocks[0].statements.iter().any(|statement| {
             matches!(statement, MirStatement::Assign { place: Place::Local(id), .. } if *id != usize::MAX)
         }));
+        assert!(mir.functions[0].blocks[0].statements.iter().any(|statement| {
+            matches!(statement, MirStatement::StorageDead(id) if *id != usize::MAX)
+        }));
     }
 
     #[test]
