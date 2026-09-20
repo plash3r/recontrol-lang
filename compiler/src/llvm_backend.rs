@@ -167,14 +167,33 @@ impl<'a> Cx<'a> {
         if (*id==BUILTIN_PRINT_ID || *id==BUILTIN_PRINTLN_ID) && (args.len()!=1 || self.operand_type(&args[0])? != Type::Str) {
             return self.err_result("print/println currently require a str argument");
         }
+        // Operands can themselves require LLVM instructions (for example, a
+        // local variable is represented by a load).  Those instructions must
+        // be emitted before the call; LLVM does not allow an instruction such
+        // as "%0 = load ..." inline inside a call argument list.
+        let mut prelude=String::new();
         let mut rendered=Vec::new();
         for (i,a) in args.iter().enumerate() {
-            let v=self.operand(a)?; let ty=params.get(i).cloned().unwrap_or(self.operand_type(a)?);
+            let ty=params.get(i).cloned().unwrap_or(self.operand_type(a)?);
+            let v=match a {
+                Operand::Copy(p)|Operand::Move(p) => {
+                    let p=self.place(p)?;
+                    let t=self.tmp();
+                    writeln!(prelude, "  %{t} = load {}, ptr {p}", llvm_type(&ty)).unwrap();
+                    format!("%{t}")
+                }
+                _ => self.operand(a)?,
+            };
             rendered.push(format!("{} {}",llvm_type(&ty),v));
         }
         let text=rendered.join(", ");
-        if ret==Type::Unit { Ok(format!("  call void @{name}({text})\n")) }
-        else { let t=self.tmp(); Ok(format!("%{t} = call {} @{name}({text})\n",llvm_type(&ret))) }
+        if ret==Type::Unit {
+            Ok(format!("{prelude}  call void @{name}({text})\\n"))
+        }
+        else {
+            let t=self.tmp();
+            Ok(format!("{prelude}%{t} = call {} @{name}({text})\\n",llvm_type(&ret)))
+        }
     }
 
     fn operand(&mut self, o: &Operand) -> Result<String, Vec<CodegenError>> {
