@@ -514,6 +514,12 @@ mod tests {
     }
 
     #[test]
+    fn for_loop_storage_liveness_passes() {
+        let mir = lower("fn main(){for(let mut i:i32=0; i<5; i++){println(\"Hello!\")}}");
+        assert!(MirValidator::validate(&mir).is_ok());
+    }
+
+    #[test]
     fn branch_join_with_live_storage_passes() {
         let function = MirFunction {
             param_count: 0,
