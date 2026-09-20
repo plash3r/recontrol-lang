@@ -38,11 +38,15 @@ jobs:
         shell: pwsh
         run: |
           choco install llvm -y
-          $llc = Get-ChildItem -Path 'C:\Program Files\LLVM\bin','C:\ProgramData\chocolatey\bin' -Filter llc.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $llc = Get-ChildItem -Path 'C:\Program Files\LLVM','C:\ProgramData\chocolatey\lib' -Filter llc.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $llc) {
-            throw "LLVM llc.exe was not found after Chocolatey installation"
+            $llc = Get-ChildItem -Path 'C:\' -Filter llc.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $llc) {
+            throw "LLVM llc.exe was not found on the Windows runner"
           }
           $llvmBin = $llc.DirectoryName
+          Write-Host "Found LLVM at $llvmBin"
           if (-not (Test-Path "$llvmBin\lld-link.exe")) {
             throw "LLVM lld-link.exe was not found in $llvmBin"
           }
