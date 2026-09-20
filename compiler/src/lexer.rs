@@ -14,7 +14,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Fn, Struct, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Fn, Struct, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Bang, PlusPlus, MinusMinus,
@@ -114,7 +114,7 @@ impl<'a> Lexer<'a> {
         let mut text = first.to_string();
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
-            "let" => TokenKind::Let, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
+            "let" => TokenKind::Let, "mut" => TokenKind::Mut, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
             "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
             "false" => TokenKind::False, "return" => TokenKind::Return,
