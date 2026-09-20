@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 
-use rcl::lexer::Lexer;
+use rcl::borrowck::BorrowChecker;\nuse rcl::lexer::Lexer;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
@@ -47,7 +47,15 @@ fn main() {
             };
 
             match SemanticAnalyzer::check(&program) {
-                Ok(()) => println!("OK: semantic check passed ({} top-level item(s))", program.items.len()),
+                Ok(()) => match BorrowChecker::check(&program) {
+                    Ok(()) => println!("OK: semantic and borrow checks passed ({} top-level item(s))", program.items.len()),
+                    Err(errors) => {
+                        for error in errors {
+                            eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
+                        }
+                        std::process::exit(1);
+                    }
+                },
                 Err(errors) => {
                     for error in errors {
                         eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
