@@ -58,15 +58,15 @@ impl Type {
 
     pub fn display_name(&self) -> String {
         match self {
-            Type::I8 => "i8", Type::I16 => "i16", Type::I32 => "i32", Type::I64 => "i64",
-            Type::I128 => "i128", Type::I256 => "i256", Type::U8 => "u8", Type::U16 => "u16",
-            Type::U32 => "u32", Type::U64 => "u64", Type::U128 => "u128", Type::U256 => "u256",
-            Type::F32 => "f32", Type::F64 => "f64", Type::F128 => "f128", Type::Bool => "bool",
-            Type::Char => "char", Type::Str => "str", Type::Unit => "void",
-            Type::Named(name) => name.clone(), Type::Reference { mutable, inner } =>
-                format!("&{}{}", if *mutable { "mut " } else { "" }, inner.display_name()),
+            Type::I8 => "i8".into(), Type::I16 => "i16".into(), Type::I32 => "i32".into(), Type::I64 => "i64".into(),
+            Type::I128 => "i128".into(), Type::I256 => "i256".into(), Type::U8 => "u8".into(), Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(), Type::U64 => "u64".into(), Type::U128 => "u128".into(), Type::U256 => "u256".into(),
+            Type::F32 => "f32".into(), Type::F64 => "f64".into(), Type::F128 => "f128".into(), Type::Bool => "bool".into(),
+            Type::Char => "char".into(), Type::Str => "str".into(), Type::Unit => "void".into(),
+            Type::Named(name) => name.clone(),
+            Type::Reference { mutable, inner } => format!("&{}{}", if *mutable { "mut " } else { "" }, inner.display_name()),
             Type::Array(inner) => format!("[{}]", inner.display_name()),
-            Type::Unknown => "<unknown>",
-        }.into()
+            Type::Unknown => "<unknown>".into(),
+        }
     }
 }
