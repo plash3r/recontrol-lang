@@ -103,8 +103,13 @@ impl<'a> Cx<'a> {
                 Ok(format!("  br i1 {c}, label %bb{then_block}, label %bb{else_block}\n"))
             }
             Terminator::Return(None) => {
-                if self.return_type() == Type::Unit { Ok("  ret void\n".into()) }
-                else { Err(vec![self.err("bare return in non-unit function")]) }
+                if self.function.name == "main" && self.return_type_of(self.function) == Type::Unit {
+                    Ok("  ret i32 0\n".into())
+                } else if self.return_type() == Type::Unit {
+                    Ok("  ret void\n".into())
+                } else {
+                    Err(vec![self.err("bare return in non-unit function")])
+                }
             }
             Terminator::Return(Some(v)) => {
                 let ty = self.return_type();
