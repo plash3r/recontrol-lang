@@ -2,5 +2,13 @@
 name = "rcl"
 version = "0.1.0"
 edition = "2024"
+description = "Recontrol Lang compiler"
+license = "MIT"
+repository = "https://github.com/plash3r/recontrol-lang"
+readme = "../README.md"
+
+[[bin]]
+name = "rcl"
+path = "src/main.rs"
 
 [dependencies]
