@@ -1,5 +1,5 @@
 use crate::ast::{BinaryOp, Literal, UnaryOp};
-use crate::hir::{FunctionId, HirProgram, BUILTIN_PRINT_ID, BUILTIN_PRINTLN_ID};
+use crate::hir::{FunctionId, BUILTIN_PRINT_ID, BUILTIN_PRINTLN_ID};
 use crate::mir::{MirFunction, MirProgram, MirStatement, Operand, Place, Rvalue, Terminator};
 use crate::types::Type;
 use std::collections::HashMap;
@@ -198,7 +198,7 @@ impl<'a> Cx<'a> {
             Literal::String(s)=>{
                 let bytes=s.as_bytes().iter().copied().chain([0]).collect::<Vec<_>>();
                 let name=self.intern_string(bytes.clone());
-                Ok(format!("getelementptr inbounds [{} x i8], ptr {}, i64 0, i64 0",bytes.len(),name))
+                Ok(format!("getelementptr inbounds ([{} x i8], ptr {}, i64 0, i64 0)",bytes.len(),name))
             }
         }
     }
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn emits_direct_function_call() {
-        let source = "fn add(a:i32,b:i32)->i32{return a+b} fn main(){let x:i32=add(1,2)}";
+        let source = "fn add(a:i32,b:i32):i32{return a+b} fn main(){let x:i32=add(1,2)}";
         let tokens = Lexer::new(source).tokenize().unwrap();
         let program = Parser::new(tokens).parse().unwrap();
         SemanticAnalyzer::check(&program).unwrap();
