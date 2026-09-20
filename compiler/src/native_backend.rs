@@ -69,6 +69,7 @@ fn emit_linux(p:&MirProgram)->Result<Vec<u8>,Vec<CodegenError>>{
     let mut code=entry();let mut off=0usize;
     for (_,e,end) in es{let _=end;let n=e.patch(&funcs,base,ro).unwrap();code.extend_from_slice(&n);off+=n.len();let _=off;}
     let main=*funcs.get("main").unwrap_or(&stub);let d=(base+main) as isize-(base+5) as isize;code[1..5].copy_from_slice(&(d as i32).to_le_bytes());code.extend_from_slice(&rod);
+    patch_string_leas(&mut code, base, ro, &strings)?;
     Ok(elf(code,base))
 }
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
