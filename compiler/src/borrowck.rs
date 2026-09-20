@@ -444,49 +444,49 @@ mod tests {
 
     #[test]
     fn shared_borrows_live_until_scope_end() {
-        let source = "fn main(){let x=10 let a=&x let b=&x}";
+        let source = "fn main(){let x=10\nlet a=&x\nlet b=&x}";
         assert!(check(source).is_ok());
     }
 
     #[test]
     fn mutable_borrow_blocks_mutation() {
-        let source = "fn main(){let mut x=10 let r=&mut x x=20}";
+        let source = "fn main(){let mut x=10\nlet r=&mut x\nx=20}";
         assert!(check(source).is_err());
     }
 
     #[test]
     fn shared_borrow_blocks_mutation() {
-        let source = "fn main(){let mut x=10 let r=&x x=20}";
+        let source = "fn main(){let mut x=10\nlet r=&x\nx=20}";
         assert!(check(source).is_err());
     }
 
     #[test]
     fn mutable_borrows_are_exclusive() {
-        let source = "fn main(){let mut x=10 let a=&mut x let b=&mut x}";
+        let source = "fn main(){let mut x=10\nlet a=&mut x\nlet b=&mut x}";
         assert!(check(source).is_err());
     }
 
     #[test]
     fn mutable_borrow_blocks_read() {
-        let source = "fn main(){let mut x=10 let r=&mut x println(x)}";
+        let source = "fn main(){let mut x=10\nlet r=&mut x\nprintln(x)}";
         assert!(check(source).is_err());
     }
 
     #[test]
     fn borrow_ends_with_scope() {
-        let source = "fn main(){let mut x=10 {let r=&x} x=20}";
+        let source = "fn main(){let mut x=10\n{let r=&x}\nx=20}";
         assert!(check(source).is_ok());
     }
 
     #[test]
     fn mutable_reference_requires_mut_variable() {
-        let source = "fn touch(value: &mut i32){} fn main(){let value=10 touch(value)}";
+        let source = "fn touch(value: &mut i32){} fn main(){\nlet value=10\ntouch(value)\n}";
         assert!(check(source).is_err());
     }
 
     #[test]
     fn mutable_reference_accepts_mut_variable() {
-        let source = "fn touch(value: &mut i32){} fn main(){let mut value=10 touch(value)}";
+        let source = "fn touch(value: &mut i32){} fn main(){\nlet mut value=10\ntouch(value)\n}";
         assert!(check(source).is_ok());
     }
 }
