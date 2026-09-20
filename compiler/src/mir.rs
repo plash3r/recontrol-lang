@@ -264,11 +264,12 @@ impl MirLowerer {
                 } else if let HirExprKind::Postfix { expr: target, op } = &expr.kind {
                     let rvalue = Self::lower_postfix_rvalue(builder, locals, target, *op);
                     builder.statement(MirStatement::Assign {
-                        place: Self::lower_place(target),
+                        place: Self::lower_place(builder, locals, target),
                         rvalue,
                     });
                 } else {
-                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(builder, locals, expr)));
+                    let rvalue = Self::lower_rvalue(builder, locals, expr);
+                    builder.statement(MirStatement::Evaluate(rvalue));
                 }
             }
             HirStmt::Return(expr) => {
@@ -312,7 +313,7 @@ impl MirLowerer {
                 builder.finish_block(Terminator::Goto(head));
 
                 builder.switch_to(head);
-                let condition = Self::lower_operand(condition);
+                let condition = Self::lower_operand(builder, locals, condition);
                 builder.finish_block(Terminator::SwitchBool {
                     condition,
                     then_block: body_block,
@@ -333,7 +334,7 @@ impl MirLowerer {
                 builder.finish_block(Terminator::Goto(body_block));
 
                 builder.switch_to(body_block);
-                Self::lower_block(builder, body);
+                Self::lower_block(builder, body, locals);
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(condition_block));
                 }
@@ -377,7 +378,8 @@ impl MirLowerer {
 
                 builder.switch_to(update_block);
                 if let Some(update) = update {
-                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(builder, locals, update)));
+                    let rvalue = Self::lower_rvalue(builder, locals, update);
+                    builder.statement(MirStatement::Evaluate(rvalue));
                 }
                 builder.finish_block(Terminator::Goto(head));
                 builder.switch_to(exit);
