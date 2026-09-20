@@ -68,7 +68,7 @@ pub enum Operand {
 pub enum Terminator {
     Goto(BasicBlockId),
     SwitchBool { condition: Operand, then_block: BasicBlockId, else_block: BasicBlockId },
-    Return,
+    Return(Option<Rvalue>),
     Unreachable,
 }
 
@@ -131,7 +131,7 @@ impl MirLowerer {
         let mut builder = Builder::new();
         Self::lower_block(&mut builder, &function.body);
         if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
-            builder.finish_block(Terminator::Return);
+            builder.finish_block(Terminator::Return(None));
         }
 
         MirFunction {
@@ -176,10 +176,8 @@ impl MirLowerer {
                 }
             }
             HirStmt::Return(expr) => {
-                if let Some(expr) = expr {
-                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(expr)));
-                }
-                builder.finish_block(Terminator::Return);
+                let value = expr.as_ref().map(Self::lower_rvalue);
+                builder.finish_block(Terminator::Return(value));
                 let next = builder.new_block();
                 builder.switch_to(next);
             }
@@ -427,7 +425,7 @@ mod tests {
         let mir = lower("fn main(){let x:i32=10 return}");
         assert_eq!(mir.functions.len(), 1);
         assert!(matches!(mir.functions[0].blocks[0].statements[0], MirStatement::StorageLive(_)));
-        assert!(matches!(mir.functions[0].blocks[0].terminator, Terminator::Return));
+        assert!(matches!(mir.functions[0].blocks[0].terminator, Terminator::Return(None)));
     }
 
     #[test]
