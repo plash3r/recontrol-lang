@@ -342,6 +342,20 @@ mod tests {
     }
 
     #[test]
+    fn emits_i256_arithmetic() {
+        let source = "fn add(a:i256,b:i256):i256{return a+b} fn main(){let x:i256=add(340282366920938463463374607431768211456i256,2i256)}";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("define i256 @rcl_add"));
+        assert!(llvm.contains("add i256"));
+    }
+
+    #[test]
     fn emits_hello_world_llvm() {
         let source = r#"fn main(){let message:str="Hello" println(message)}"#;
         let tokens = Lexer::new(source).tokenize().unwrap();
