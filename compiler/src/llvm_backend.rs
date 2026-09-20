@@ -243,7 +243,8 @@ impl<'a> Cx<'a> {
         match v {
             Rvalue::Use(o)|Rvalue::Unary{operand:o,..}=>self.static_operand_type(o,f),
             Rvalue::Binary{left,op,..}=>if matches!(op,BinaryOp::Equal|BinaryOp::NotEqual|BinaryOp::Less|BinaryOp::LessEqual|BinaryOp::Greater|BinaryOp::GreaterEqual|BinaryOp::And|BinaryOp::Or){Some(Type::Bool)}else{self.static_operand_type(left,f)},
-            Rvalue::Ref{place,..}=>self.static_place_type(place,f),
+            Rvalue::Ref{mutable,place}=>self.static_place_type(place,f).map(|inner| Type::Reference { mutable:*mutable, inner:Box::new(inner) }),
+            Rvalue::Call{callee:Operand::Function(id),..}=>self.signature(*id).ok().map(|(_,ret,_)|ret),
             _=>None,
         }
     }
