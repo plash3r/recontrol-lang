@@ -129,7 +129,9 @@ impl MirMoveAnalyzer {
     ) {
         match statement {
             MirStatement::StorageLive(local) => {
-                state.locals.insert(*local, LocalState::Uninitialized);
+                if !function.locals.iter().take(function.param_count).any(|p| p.id == *local) {
+                    state.locals.insert(*local, LocalState::Uninitialized);
+                }
             }
             MirStatement::StorageDead(local) => {
                 state.locals.insert(*local, LocalState::Moved);
