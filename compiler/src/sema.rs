@@ -356,7 +356,15 @@ impl SemanticAnalyzer {
         for (index, arg) in args.iter().enumerate() {
             let actual = self.check_expr(arg, env);
             if let Some(expected) = sig.params.get(index) {
-                if !self.compatible(expected, &actual) {
+                let compatible = if index == 0 {
+                    match expected {
+                        Type::Reference { inner, .. } => self.compatible(inner, &actual),
+                        _ => self.compatible(expected, &actual),
+                    }
+                } else {
+                    self.compatible(expected, &actual)
+                };
+                if !compatible {
                     self.error(format!("argument {} type mismatch: expected {}, found {}", index + 1, expected.display_name(), actual.display_name()));
                 }
             }
@@ -427,7 +435,11 @@ impl SemanticAnalyzer {
     }
 
     fn compatible(&self, expected: &Type, actual: &Type) -> bool {
-        expected == actual || matches!(expected, Type::Unknown) || matches!(actual, Type::Unknown)
+        expected == actual
+            || matches!(expected, Type::Unknown)
+            || matches!(actual, Type::Unknown)
+            || matches!((expected, actual),
+                (Type::Reference { inner, .. }, actual) if inner.as_ref() == actual)
     }
 }
 
