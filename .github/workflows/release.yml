@@ -45,7 +45,7 @@ jobs:
           ./target/${{ matrix.target }}/release/rcl build smoke.rcl
           file smoke
           readelf -h -l smoke
-          objdump -D -Mintel smoke | head -120
+          xxd -g1 smoke | head -40
           set +e
           ./smoke > smoke.out
           status=$?
