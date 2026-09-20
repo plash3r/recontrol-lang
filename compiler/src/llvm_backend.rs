@@ -89,7 +89,7 @@ impl<'a> Cx<'a> {
             MirStatement::Evaluate(rvalue) => {
                 let value = self.rvalue(rvalue)?;
                 if value.starts_with("  ") { Ok(value) }
-                else if value.contains(" = ") { Ok(format!("  {value}\\n")) }
+                else if value.contains(" = ") { Ok(format!("  {value}\n")) }
                 else { Ok(String::new()) }
             }
         }
