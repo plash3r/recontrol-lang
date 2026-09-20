@@ -342,6 +342,72 @@ mod tests {
     }
 
     #[test]
+    fn emits_i256_hpc_workload() {
+        let source = r#"
+fn gcd(a:i256,b:i256):i256 {
+    let mut x:i256=a
+    let mut y:i256=b
+    while y != 0i256 {
+        let mut t:i256=x % y
+        x=y
+        y=t
+    }
+    return x
+}
+fn lcm(a:i256,b:i256):i256 { return (a / gcd(a,b)) * b }
+fn modpow(base:i256,exp:i256,modulus:i256):i256 {
+    let mut result:i256=1i256
+    let mut b:i256=base % modulus
+    let mut e:i256=exp
+    while e > 0i256 {
+        if e % 2i256 == 1i256 { result=(result*b)%modulus }
+        b=(b*b)%modulus
+        e=e/2i256
+    }
+    return result
+}
+fn fibonacci(n:i256):i256 {
+    let mut a:i256=0i256
+    let mut b:i256=1i256
+    let mut i:i256=0i256
+    while i < n { let mut t:i256=a+b a=b b=t i=i+1i256 }
+    return a
+}
+fn factorial_mod(n:i256,m:i256):i256 {
+    let mut r:i256=1i256
+    let mut i:i256=1i256
+    while i <= n { r=(r*i)%m i=i+1i256 }
+    return r
+}
+fn arithmetic_sum(n:i256):i256 { return n*(n+1i256)/2i256 }
+fn sum_of_squares(n:i256):i256 { return n*(n+1i256)*(2i256*n+1i256)/6i256 }
+fn main() {
+    let a:i256=123456789012345678901234567890i256
+    let b:i256=98765432109876543210987654321i256
+    let x:i256=gcd(a,b)
+    let y:i256=lcm(a,b)
+    let z:i256=modpow(123456789i256,12345i256,1000000007i256)
+    let f:i256=fibonacci(100i256)
+    let q:i256=factorial_mod(100i256,1000000007i256)
+    let s:i256=arithmetic_sum(1000000i256)
+    let ss:i256=sum_of_squares(1000000i256)
+}
+"#;
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("define i256 @rcl_gcd"));
+        assert!(llvm.contains("define i256 @rcl_modpow"));
+        assert!(llvm.contains("srem i256"));
+        assert!(llvm.contains("sdiv i256"));
+        assert!(llvm.contains("mul i256"));
+    }
+
+    #[test]
     fn emits_i256_arithmetic() {
         let source = "fn add(a:i256,b:i256):i256{return a+b} fn main(){let x:i256=add(340282366920938463463374607431768211456i256,2i256)}";
         let tokens = Lexer::new(source).tokenize().unwrap();
