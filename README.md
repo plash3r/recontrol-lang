@@ -123,3 +123,4 @@ RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> O
 The first backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, and print/println runtime calls.
 
 Struct field lowering, arrays, indirect calls, richer reference lowering, target-specific ABI details, and optimization passes remain separate backend milestones.
+<!-- release rebuild -->
