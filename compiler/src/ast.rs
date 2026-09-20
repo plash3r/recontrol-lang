@@ -59,7 +59,7 @@ pub enum Expr {
 pub enum Literal { Number(String), String(String), Bool(bool) }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp { Plus, Minus, Not }
+pub enum UnaryOp { Plus, Minus, Not, BorrowShared, BorrowMutable }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -69,7 +69,10 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PostfixOp { Increment, Decrement }\n\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum AssignOp { Assign, Add, Subtract, Multiply, Divide, Modulo }
+pub enum PostfixOp { Increment, Decrement }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignOp { Assign, Add, Subtract, Multiply, Divide, Modulo }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeRef { pub name: String, pub reference: ReferenceKind }
