@@ -1,0 +1,49 @@
+name: Build VS Code extension
+
+on:
+  push:
+    paths:
+      - "vscode-extension/**"
+      - ".github/workflows/vscode-extension.yml"
+  pull_request:
+    paths:
+      - "vscode-extension/**"
+      - ".github/workflows/vscode-extension.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vscode-extension
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package --no-dependencies
+      - name: Validate VSIX
+        run: |
+          test -n "$(find . -maxdepth 1 -name '*.vsix' -print -quit)"
+          unzip -t ./*.vsix >/dev/null
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recontrol-lang-vscode
+          path: vscode-extension/*.vsix
+          if-no-files-found: error
+      - name: Upload VSIX to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/vscode-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Recontrol Lang VS Code ${{ github.ref_name }}
+          generate_release_notes: true
+          files: vscode-extension/*.vsix
