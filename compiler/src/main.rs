@@ -135,8 +135,9 @@ fn main() {
         Some("run") => match args.next() {
             Some(path) => match build_native(&path) {
                 Ok(out) => {
-                    let status = Command::new(&out).status().unwrap_or_else(|e| {
-                        eprintln!("rcl: cannot run {}: {e}", out.display());
+                    let executable = fs::canonicalize(&out).unwrap_or_else(|_| out.clone());
+                    let status = Command::new(&executable).status().unwrap_or_else(|e| {
+                        eprintln!("rcl: cannot run {}: {e}", executable.display());
                         std::process::exit(1);
                     });
                     std::process::exit(status.code().unwrap_or(1));
