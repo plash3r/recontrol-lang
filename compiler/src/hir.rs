@@ -1,0 +1,332 @@
+use crate::ast::{self, AssignOp, BinaryOp, Literal, PostfixOp, ReferenceKind, UnaryOp};
+use crate::types::Type;
+
+pub type FunctionId = usize;
+pub type LocalId = usize;
+pub type ExprId = usize;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirProgram {
+    pub functions: Vec<HirFunction>,
+    pub structs: Vec<HirStruct>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirStruct {
+    pub name: String,
+    pub fields: Vec<HirField>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirField {
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirFunction {
+    pub id: FunctionId,
+    pub name: String,
+    pub params: Vec<HirParam>,
+    pub return_type: Type,
+    pub body: HirBlock,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirParam {
+    pub local: LocalId,
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirLocal {
+    pub id: LocalId,
+    pub name: String,
+    pub ty: Type,
+    pub mutable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBlock {
+    pub locals: Vec<HirLocal>,
+    pub statements: Vec<HirStmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirStmt {
+    Let { local: LocalId, initializer: Option<HirExpr> },
+    Expr(HirExpr),
+    Return(Option<HirExpr>),
+    If { condition: HirExpr, then_branch: HirBlock, else_branch: Option<Box<HirStmt>> },
+    While { condition: HirExpr, body: HirBlock },
+    DoWhile { body: HirBlock, condition: HirExpr },
+    For { initializer: Option<Box<HirStmt>>, condition: Option<HirExpr>, update: Option<HirExpr>, body: HirBlock },
+    Block(HirBlock),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirExpr {
+    pub ty: Type,
+    pub kind: HirExprKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirExprKind {
+    Literal(Literal),
+    Local(LocalId),
+    Unary { op: UnaryOp, expr: Box<HirExpr> },
+    Binary { left: Box<HirExpr>, op: BinaryOp, right: Box<HirExpr> },
+    Assignment { target: Box<HirExpr>, op: AssignOp, value: Box<HirExpr> },
+    Call { callee: Box<HirExpr>, args: Vec<HirExpr> },
+    Member { object: Box<HirExpr>, name: String },
+    Postfix { expr: Box<HirExpr>, op: PostfixOp },
+    StructLiteral { name: String, fields: Vec<(String, HirExpr)> },
+    Array(Vec<HirExpr>),
+    Index { object: Box<HirExpr>, index: Box<HirExpr> },
+    Function(FunctionId),
+}
+
+#[derive(Debug)]
+pub struct HirLowerer {
+    next_function: FunctionId,
+    next_local: LocalId,
+    functions: Vec<HirFunction>,
+    structs: Vec<HirStruct>,
+}
+
+impl HirLowerer {
+    pub fn lower(program: &ast::Program) -> HirProgram {
+        let mut lowerer = Self {
+            next_function: 0,
+            next_local: 0,
+            functions: Vec::new(),
+            structs: Vec::new(),
+        };
+
+        for item in &program.items {
+            match item {
+                ast::Item::Struct(s) => lowerer.structs.push(HirStruct {
+                    name: s.name.clone(),
+                    fields: s.fields.iter().map(|f| HirField {
+                        name: f.name.clone(),
+                        ty: Type::from_ref(&f.ty),
+                    }).collect(),
+                }),
+                ast::Item::Function(f) => lowerer.lower_function(f),
+                ast::Item::Impl(i) => {
+                    for f in &i.methods {
+                        lowerer.lower_function(f);
+                    }
+                }
+            }
+        }
+
+        HirProgram {
+            functions: lowerer.functions,
+            structs: lowerer.structs,
+        }
+    }
+
+    fn lower_function(&mut self, function: &ast::Function) {
+        let id = self.next_function;
+        self.next_function += 1;
+        let mut locals = Vec::new();
+        let mut params = Vec::new();
+
+        for parameter in &function.params {
+            let local = self.new_local();
+            let ty = Type::from_ref(&parameter.ty);
+            locals.push(HirLocal {
+                id: local,
+                name: parameter.name.clone(),
+                ty: ty.clone(),
+                mutable: matches!(ty, Type::Reference { mutable: true, .. }),
+            });
+            params.push(HirParam {
+                local,
+                name: parameter.name.clone(),
+                ty,
+            });
+        }
+
+        let mut body = self.lower_block(&function.body);
+        body.locals.splice(0..0, locals);
+
+        self.functions.push(HirFunction {
+            id,
+            name: function.name.clone(),
+            params,
+            return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+            body,
+        });
+    }
+
+    fn new_local(&mut self) -> LocalId {
+        let id = self.next_local;
+        self.next_local += 1;
+        id
+    }
+
+    fn lower_block(&mut self, block: &ast::Block) -> HirBlock {
+        let mut result = HirBlock { locals: Vec::new(), statements: Vec::new() };
+        for statement in &block.statements {
+            result.statements.push(self.lower_stmt(statement, &mut result.locals));
+        }
+        result
+    }
+
+    fn lower_stmt(&mut self, statement: &ast::Stmt, locals: &mut Vec<HirLocal>) -> HirStmt {
+        match statement {
+            ast::Stmt::Let { name, mutable, ty, initializer } => {
+                let local = self.new_local();
+                let inferred = initializer.as_ref().map(|e| self.lower_expr(e).ty);
+                let local_ty = ty.as_ref().map(Type::from_ref).or(inferred).unwrap_or(Type::Unknown);
+                locals.push(HirLocal { id: local, name: name.clone(), ty: local_ty, mutable: *mutable });
+                HirStmt::Let {
+                    local,
+                    initializer: initializer.as_ref().map(|e| self.lower_expr(e)),
+                }
+            }
+            ast::Stmt::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
+            ast::Stmt::Return(e) => HirStmt::Return(e.as_ref().map(|e| self.lower_expr(e))),
+            ast::Stmt::If { condition, then_branch, else_branch } => HirStmt::If {
+                condition: self.lower_expr(condition),
+                then_branch: self.lower_block(then_branch),
+                else_branch: else_branch.as_ref().map(|s| Box::new(self.lower_stmt(s, &mut Vec::new()))),
+            },
+            ast::Stmt::While { condition, body } => HirStmt::While {
+                condition: self.lower_expr(condition),
+                body: self.lower_block(body),
+            },
+            ast::Stmt::DoWhile { body, condition } => HirStmt::DoWhile {
+                body: self.lower_block(body),
+                condition: self.lower_expr(condition),
+            },
+            ast::Stmt::For { initializer, condition, update, body } => HirStmt::For {
+                initializer: initializer.as_ref().map(|s| Box::new(self.lower_stmt(s, locals))),
+                condition: condition.as_ref().map(|e| self.lower_expr(e)),
+                update: update.as_ref().map(|e| self.lower_expr(e)),
+                body: self.lower_block(body),
+            },
+            ast::Stmt::Block(b) => HirStmt::Block(self.lower_block(b)),
+        }
+    }
+
+    fn lower_expr(&mut self, expr: &ast::Expr) -> HirExpr {
+        match expr {
+            ast::Expr::Literal(lit) => HirExpr { ty: self.literal_type(lit), kind: HirExprKind::Literal(lit.clone()) },
+            ast::Expr::Identifier(name) => HirExpr {
+                ty: Type::Unknown,
+                kind: HirExprKind::Local(self.local_id(name)),
+            },
+            ast::Expr::Unary { op, expr } => {
+                let inner = self.lower_expr(expr);
+                let ty = match op {
+                    UnaryOp::BorrowShared => Type::Reference { mutable: false, inner: Box::new(inner.ty.clone()) },
+                    UnaryOp::BorrowMutable => Type::Reference { mutable: true, inner: Box::new(inner.ty.clone()) },
+                    _ => inner.ty.clone(),
+                };
+                HirExpr { ty, kind: HirExprKind::Unary { op: *op, expr: Box::new(inner) } }
+            }
+            ast::Expr::Binary { left, op, right } => {
+                let l = self.lower_expr(left);
+                let r = self.lower_expr(right);
+                let ty = match op {
+                    BinaryOp::Equal | BinaryOp::NotEqual | BinaryOp::Less | BinaryOp::LessEqual |
+                    BinaryOp::Greater | BinaryOp::GreaterEqual | BinaryOp::And | BinaryOp::Or => Type::Bool,
+                    _ => l.ty.clone(),
+                };
+                HirExpr { ty, kind: HirExprKind::Binary { left: Box::new(l), op: *op, right: Box::new(r) } }
+            }
+            ast::Expr::Assignment { target, op, value } => {
+                let target = self.lower_expr(target);
+                let value = self.lower_expr(value);
+                HirExpr { ty: target.ty.clone(), kind: HirExprKind::Assignment { target: Box::new(target), op: *op, value: Box::new(value) } }
+            }
+            ast::Expr::Call { callee, args } => {
+                let callee = self.lower_expr(callee);
+                let args = args.iter().map(|a| self.lower_expr(a)).collect();
+                HirExpr { ty: Type::Unknown, kind: HirExprKind::Call { callee: Box::new(callee), args } }
+            }
+            ast::Expr::Member { object, name } => {
+                let object = self.lower_expr(object);
+                HirExpr { ty: Type::Unknown, kind: HirExprKind::Member { object: Box::new(object), name: name.clone() } }
+            }
+            ast::Expr::Postfix { expr, op } => {
+                let expr = self.lower_expr(expr);
+                HirExpr { ty: expr.ty.clone(), kind: HirExprKind::Postfix { expr: Box::new(expr), op: *op } }
+            }
+            ast::Expr::Grouping(inner) => self.lower_expr(inner),
+            ast::Expr::StructLiteral { name, fields } => HirExpr {
+                ty: Type::Named(name.clone()),
+                kind: HirExprKind::StructLiteral {
+                    name: name.clone(),
+                    fields: fields.iter().map(|(n, e)| (n.clone(), self.lower_expr(e))).collect(),
+                },
+            },
+            ast::Expr::Array(values) => {
+                let values: Vec<_> = values.iter().map(|e| self.lower_expr(e)).collect();
+                let ty = values.first().map(|e| Type::Array(Box::new(e.ty.clone()))).unwrap_or(Type::Array(Box::new(Type::Unknown)));
+                HirExpr { ty, kind: HirExprKind::Array(values) }
+            }
+            ast::Expr::Index { object, index } => {
+                let object = self.lower_expr(object);
+                let index = self.lower_expr(index);
+                let ty = match &object.ty {
+                    Type::Array(inner) => (**inner).clone(),
+                    Type::Str => Type::Char,
+                    _ => Type::Unknown,
+                };
+                HirExpr { ty, kind: HirExprKind::Index { object: Box::new(object), index: Box::new(index) } }
+            }
+        }
+    }
+
+    fn local_id(&self, _name: &str) -> LocalId {
+        // Name resolution is deliberately kept in a later HIR pass.
+        // This placeholder is replaced by the resolver before MIR lowering.
+        usize::MAX
+    }
+
+    fn literal_type(&self, literal: &Literal) -> Type {
+        match literal {
+            Literal::Bool(_) => Type::Bool,
+            Literal::String(_) => Type::Str,
+            Literal::Number(n) => self.number_type(n),
+        }
+    }
+
+    fn number_type(&self, n: &str) -> Type {
+        let l = n.to_ascii_lowercase();
+        for s in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"] {
+            if l.ends_with(s) {
+                return match s {
+                    "u8"=>Type::U8,"u16"=>Type::U16,"u32"=>Type::U32,"u64"=>Type::U64,"u128"=>Type::U128,"u256"=>Type::U256,
+                    "i8"=>Type::I8,"i16"=>Type::I16,"i32"=>Type::I32,"i64"=>Type::I64,"i128"=>Type::I128,"i256"=>Type::I256,
+                    "f32"=>Type::F32,"f64"=>Type::F64,"f128"=>Type::F128,_=>Type::Unknown
+                };
+            }
+        }
+        if l.contains('.') { Type::F64 } else { Type::I32 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{lexer::Lexer, parser::Parser, sema::SemanticAnalyzer};
+
+    #[test]
+    fn lowers_basic_program() {
+        let source = "fn main(){let x:i32=10 println(x)}";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        assert_eq!(hir.functions.len(), 1);
+        assert_eq!(hir.functions[0].name, "main");
+        assert_eq!(hir.functions[0].body.statements.len(), 2);
+        assert_eq!(hir.functions[0].body.locals.len(), 1);
+    }
+}
