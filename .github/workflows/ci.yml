@@ -27,3 +27,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang
       - name: Build and run native executable
         run: cargo run -p rcl -- run examples/hello.rcl
+      - name: Build and run i256 HPC demo
+        run: cargo run -p rcl -- run examples/hpc_i256.rcl
