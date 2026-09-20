@@ -61,6 +61,7 @@ pub enum Operand {
     Copy(Place),
     Move(Place),
     Constant(Literal),
+    Function(crate::hir::FunctionId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,7 +306,27 @@ impl MirLowerer {
                 op: *op,
                 right: Self::lower_operand(right),
             },
-            HirExprKind::Assignment { target, value, .. } => Rvalue::Use(Self::lower_operand(value)),
+            HirExprKind::Assignment { target, op, value } => {
+                let rvalue = match op {
+                    AssignOp::Assign => Self::lower_rvalue(value),
+                    AssignOp::Add | AssignOp::Subtract | AssignOp::Multiply | AssignOp::Divide | AssignOp::Modulo => {
+                        let binary_op = match op {
+                            AssignOp::Add => BinaryOp::Add,
+                            AssignOp::Subtract => BinaryOp::Subtract,
+                            AssignOp::Multiply => BinaryOp::Multiply,
+                            AssignOp::Divide => BinaryOp::Divide,
+                            AssignOp::Modulo => BinaryOp::Modulo,
+                            AssignOp::Assign => unreachable!(),
+                        };
+                        Rvalue::Binary {
+                            left: Self::lower_operand(target),
+                            op: binary_op,
+                            right: Self::lower_operand(value),
+                        }
+                    }
+                };
+                rvalue
+            }
             HirExprKind::Call { callee, args } => Rvalue::Call {
                 callee: Self::lower_operand(callee),
                 args: args.iter().map(Self::lower_operand).collect(),
@@ -327,7 +348,7 @@ impl MirLowerer {
                 base: Box::new(Self::lower_place(object)),
                 index: Self::lower_operand(index),
             })),
-            HirExprKind::Function(id) => Rvalue::Use(Operand::Copy(Place::Local(*id))),
+            HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
         }
     }
 
@@ -341,6 +362,7 @@ impl MirLowerer {
                     Operand::Move(Place::Local(*local))
                 }
             }
+            HirExprKind::Function(id) => Operand::Function(*id),
             _ => Operand::Move(Place::Local(usize::MAX)),
         }
     }
