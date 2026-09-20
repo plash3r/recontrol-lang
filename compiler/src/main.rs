@@ -5,7 +5,7 @@ use std::process::Command;
 
 use rcl::borrowck::BorrowChecker;
 use rcl::hir::HirLowerer;
-use rcl::llvm_backend::LlvmBackend;
+use rcl::llvm_backend::LlvmBackend;\nuse rcl::native_backend::NativeBackend;
 use rcl::mir::MirLowerer;
 use rcl::mir_borrow::MirBorrowAnalyzer;
 use rcl::mir_move::MirMoveAnalyzer;
@@ -60,78 +60,7 @@ fn build_llvm(source: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-const RUNTIME_SOURCE: &str = r#"
-use std::ffi::CStr;
-use std::io::{self, Write};
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rcl_print(s: *const u8) {
-    if s.is_null() { return; }
-    let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
-    let text = String::from_utf8_lossy(bytes);
-    print!("{text}");
-    let _ = io::stdout().flush();
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rcl_println(s: *const u8) {
-    if s.is_null() { println!(); return; }
-    let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
-    let text = String::from_utf8_lossy(bytes);
-    println!("{text}");
-}
-"#;
-
-fn build_runtime() -> Result<PathBuf, String> {
-    let temp = env::temp_dir();
-    let source = temp.join(format!("rcl_runtime_{}.rs", std::process::id()));
-    #[cfg(windows)]
-    let library = temp.join("rcl_runtime_rcl.lib");
-    #[cfg(not(windows))]
-    let library = temp.join("librcl_runtime_rcl.a");
-
-    fs::write(&source, RUNTIME_SOURCE)
-        .map_err(|e| format!("rcl: cannot prepare runtime: {e}"))?;
-
-    let status = Command::new("rustc")
-        .args(["--edition", "2024", "--crate-name", "rcl_runtime", "--crate-type", "staticlib"])
-        .arg(&source)
-        .arg("-o")
-        .arg(&library)
-        .status()
-        .map_err(|e| format!("rcl: cannot execute rustc for the runtime: {e}"))?;
-
-    let _ = fs::remove_file(&source);
-    if !status.success() {
-        return Err("rcl: failed to build the Rust runtime".into());
-    }
-    if !library.exists() {
-        return Err(format!("rcl: runtime library was not produced: {}", library.display()));
-    }
-    Ok(library)
-}
-
-fn build_native(source: &str) -> Result<PathBuf, String> {
-    let ll = build_llvm(source)?;
-    let runtime = build_runtime()?;
-    let out = executable_path(source);
-
-    let status = Command::new("clang")
-        .arg("-x").arg("ir")
-        .arg(&ll)
-        .arg("-x").arg("none")
-        .arg(&runtime)
-        .arg("-o").arg(&out)
-        .status()
-        .map_err(|e| format!("rcl: cannot execute clang: {e}"))?;
-
-    if !status.success() {
-        return Err("rcl: clang failed while producing the native executable".into());
-    }
-    Ok(out)
-}
-
-fn new_project(name: &str) -> Result<(), String> {
+fn build_native(source: &str) -> Result<PathBuf, String> {\n    let mir = check_source(source)?;\n    let bytes = NativeBackend::emit(&mir)\n        .map_err(|e| format_errors(e.into_iter().map(|x| format!("{}: {}", x.function, x.message)).collect()))?;\n    let out = executable_path(source);\n    fs::write(&out, bytes).map_err(|e| format!("rcl: cannot write {}: {e}", out.display()))?;\n    #[cfg(unix)] {\n        use std::os::unix::fs::PermissionsExt;\n        let mut p = fs::metadata(&out).map_err(|e| format!("rcl: cannot stat {}: {e}", out.display()))?.permissions();\n        p.set_mode(0o755);\n        fs::set_permissions(&out, p).map_err(|e| format!("rcl: cannot chmod {}: {e}", out.display()))?;\n    }\n    Ok(out)\n}\n\nfn new_project(name: &str) -> Result<(), String> {
     let root = Path::new(name);
     if root.exists() { return Err(format!("rcl: directory already exists: {}", root.display())); }
 
