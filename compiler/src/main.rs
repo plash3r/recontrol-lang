@@ -4,6 +4,12 @@ use std::fs;
 use rcl::borrowck::BorrowChecker;
 use rcl::lexer::Lexer;
 use rcl::ownership::OwnershipChecker;
+use rcl::hir::HirLowerer;
+use rcl::mir::MirLowerer;
+use rcl::mir_borrow::MirBorrowAnalyzer;
+use rcl::mir_move::MirMoveAnalyzer;
+use rcl::mir_opt::MirOptimizer;
+use rcl::mir_validate::MirValidator;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
@@ -51,7 +57,40 @@ fn main() {
             match SemanticAnalyzer::check(&program) {
                 Ok(()) => match BorrowChecker::check(&program) {
                     Ok(()) => match OwnershipChecker::check(&program) {
-                        Ok(()) => println!("OK: semantic, borrow and ownership checks passed ({} top-level item(s))", program.items.len()),
+                        Ok(()) => {
+                            let hir = HirLowerer::lower(&program);
+                            let mut mir = MirLowerer::lower(&hir);
+                            MirOptimizer::optimize(&mut mir);
+
+                            match MirValidator::validate(&mir) {
+                                Ok(()) => match MirMoveAnalyzer::analyze(&mir) {
+                                    Ok(()) => match MirBorrowAnalyzer::analyze(&mir) {
+                                        Ok(()) => println!(
+                                            "OK: semantic, borrow, ownership and MIR checks passed ({} top-level item(s))",
+                                            program.items.len()
+                                        ),
+                                        Err(errors) => {
+                                            for error in errors {
+                                                eprintln!("error: MIR borrow: {}", error.message);
+                                            }
+                                            std::process::exit(1);
+                                        }
+                                    },
+                                    Err(errors) => {
+                                        for error in errors {
+                                            eprintln!("error: MIR move: {}", error.message);
+                                        }
+                                        std::process::exit(1);
+                                    }
+                                },
+                                Err(errors) => {
+                                    for error in errors {
+                                        eprintln!("error: MIR validation: {}", error.message);
+                                    }
+                                    std::process::exit(1);
+                                }
+                            }
+                        },
                         Err(errors) => {
                             for error in errors {
                                 eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
