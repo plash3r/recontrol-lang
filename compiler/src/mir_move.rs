@@ -37,9 +37,14 @@ impl MirMoveAnalyzer {
         let cfg = build_cfg(function);
         let mut in_states: HashMap<BasicBlockId, FlowState> = HashMap::new();
         let mut out_states: HashMap<BasicBlockId, FlowState> = HashMap::new();
-        let initial = FlowState {
+        let mut initial = FlowState {
             locals: function.locals.iter().map(|l| (l.id, LocalState::Uninitialized)).collect(),
         };
+        // Parameters arrive initialized from the caller. StorageLive models
+        // lifetime only and therefore must not erase their value state.
+        for local in function.locals.iter().take(function.param_count) {
+            initial.locals.insert(local.id, LocalState::Initialized);
+        }
         in_states.insert(0, initial);
 
         let mut queue = VecDeque::from([0]);
