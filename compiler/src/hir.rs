@@ -1,5 +1,6 @@
 use crate::ast::{self, AssignOp, BinaryOp, Literal, PostfixOp, ReferenceKind, UnaryOp};
 use crate::types::Type;
+use std::collections::HashMap;
 
 pub type FunctionId = usize;
 pub type LocalId = usize;
@@ -93,6 +94,7 @@ pub struct HirLowerer {
     next_local: LocalId,
     functions: Vec<HirFunction>,
     structs: Vec<HirStruct>,
+    scopes: Vec<HashMap<String, LocalId>>,
 }
 
 impl HirLowerer {
@@ -102,6 +104,7 @@ impl HirLowerer {
             next_local: 0,
             functions: Vec::new(),
             structs: Vec::new(),
+            scopes: Vec::new(),
         };
 
         for item in &program.items {
@@ -133,10 +136,12 @@ impl HirLowerer {
         self.next_function += 1;
         let mut locals = Vec::new();
         let mut params = Vec::new();
+        self.scopes.push(HashMap::new());
 
         for parameter in &function.params {
             let local = self.new_local();
             let ty = Type::from_ref(&parameter.ty);
+            self.scopes.last_mut().unwrap().insert(parameter.name.clone(), local);
             locals.push(HirLocal {
                 id: local,
                 name: parameter.name.clone(),
@@ -153,6 +158,7 @@ impl HirLowerer {
         let mut body = self.lower_block(&function.body);
         body.locals.splice(0..0, locals);
 
+        self.scopes.pop();
         self.functions.push(HirFunction {
             id,
             name: function.name.clone(),
@@ -169,10 +175,12 @@ impl HirLowerer {
     }
 
     fn lower_block(&mut self, block: &ast::Block) -> HirBlock {
+        self.scopes.push(HashMap::new());
         let mut result = HirBlock { locals: Vec::new(), statements: Vec::new() };
         for statement in &block.statements {
             result.statements.push(self.lower_stmt(statement, &mut result.locals));
         }
+        self.scopes.pop();
         result
     }
 
@@ -180,12 +188,14 @@ impl HirLowerer {
         match statement {
             ast::Stmt::Let { name, mutable, ty, initializer } => {
                 let local = self.new_local();
-                let inferred = initializer.as_ref().map(|e| self.lower_expr(e).ty);
+                let initializer_hir = initializer.as_ref().map(|e| self.lower_expr(e));
+                let inferred = initializer_hir.as_ref().map(|e| e.ty.clone());
                 let local_ty = ty.as_ref().map(Type::from_ref).or(inferred).unwrap_or(Type::Unknown);
                 locals.push(HirLocal { id: local, name: name.clone(), ty: local_ty, mutable: *mutable });
+                self.scopes.last_mut().unwrap().insert(name.clone(), local);
                 HirStmt::Let {
                     local,
-                    initializer: initializer.as_ref().map(|e| self.lower_expr(e)),
+                    initializer: initializer_hir,
                 }
             }
             ast::Stmt::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
@@ -283,10 +293,10 @@ impl HirLowerer {
         }
     }
 
-    fn local_id(&self, _name: &str) -> LocalId {
-        // Name resolution is deliberately kept in a later HIR pass.
-        // This placeholder is replaced by the resolver before MIR lowering.
-        usize::MAX
+    fn local_id(&self, name: &str) -> LocalId {
+        self.scopes.iter().rev()
+            .find_map(|scope| scope.get(name).copied())
+            .unwrap_or(usize::MAX)
     }
 
     fn literal_type(&self, literal: &Literal) -> Type {
