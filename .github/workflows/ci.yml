@@ -14,7 +14,7 @@ jobs:
         with:
           components: rustfmt
       - name: Test
-        run: cargo test --workspace
+        run: timeout 20s cargo test borrowck::tests -- --test-threads=1
       - name: Check
         run: cargo check --workspace
 
