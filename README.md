@@ -1,6 +1,6 @@
 # Recontrol Lang
 
-Recontrol Lang (RCL) 0.1.1 — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
+Recontrol Lang (RCL) 0.1.2 — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
 
 ## Install
 
@@ -66,7 +66,7 @@ rcl --help                  Show help
 
 rcl build produces a native executable next to the source file. LLVM IR can be requested explicitly with rcl emit-llvm.
 
-The current compiler uses clang to turn LLVM IR into a native executable. The release installer also installs a prebuilt Rust runtime beside the compiler. End users do not need Rust or Cargo to build RCL programs. The current native linker requirement is clang/LLVM. No C runtime source is used.
+The compiler ships with its native LLVM toolchain. The release installer installs RCL, its Rust runtime library, and a private clang/LLD toolchain beside it. End users do not need Rust, Cargo, clang, LLVM, or a separate C/C++ compiler to build RCL programs. The operating system still provides its normal native system libraries. No C runtime source is used.
 
 ## Development installation
 
@@ -114,7 +114,7 @@ fn main() {
 
 ## Compiler pipeline
 
-RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> clang/LLVM -> native executable.
+RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> bundled clang/LLD -> native executable.
 
 ## LLVM backend milestone
 
