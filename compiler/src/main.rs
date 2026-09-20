@@ -41,6 +41,8 @@ fn format_errors(errors: Vec<String>) -> String {
 
 fn llvm_path(source: &str) -> PathBuf { Path::new(source).with_extension("ll") }
 
+fn object_path(source: &str) -> PathBuf { Path::new(source).with_extension(if cfg!(windows) { "obj" } else { "o" }) }
+
 fn executable_path(source: &str) -> PathBuf {
     let path = Path::new(source);
     #[cfg(windows)]
@@ -67,10 +69,7 @@ fn runtime_library() -> Result<PathBuf, String> {
     let name = "librcl_runtime.a";
     let path = dir.join(name);
     if !path.exists() {
-        return Err(format!(
-            "rcl: bundled runtime not found: {}",
-            path.display()
-        ));
+        return Err(format!("rcl: bundled runtime not found: {}", path.display()));
     }
     Ok(path)
 }
@@ -80,63 +79,129 @@ fn toolchain_dir() -> Result<PathBuf, String> {
     let dir = exe.parent().ok_or_else(|| "rcl: compiler has no executable directory".to_string())?;
     let path = dir.join("rcl-toolchain");
     if !path.is_dir() {
-        return Err(format!("rcl: bundled native toolchain not found: {}", path.display()));
+        return Err(format!("rcl: bundled LLVM toolchain not found: {}", path.display()));
     }
     Ok(path)
 }
 
-fn native_compiler() -> Result<PathBuf, String> {
+fn llvm_tool(name: &str) -> Result<PathBuf, String> {
     let toolchain = toolchain_dir()?;
     #[cfg(windows)]
-    let path = toolchain.join("bin").join("clang.exe");
+    let path = toolchain.join("bin").join(format!("{name}.exe"));
     #[cfg(not(windows))]
-    let path = toolchain.join("bin").join("clang");
+    let path = toolchain.join("bin").join(name);
     if !path.is_file() {
-        return Err(format!("rcl: bundled clang not found: {}", path.display()));
+        return Err(format!("rcl: bundled LLVM tool not found: {}", path.display()));
     }
     Ok(path)
+}
+
+fn dynamic_linker() -> Result<PathBuf, String> {
+    for candidate in [
+        "/lib64/ld-linux-x86-64.so.2",
+        "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "/lib/ld-linux-x86-64.so.2",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err("rcl: cannot locate the Linux dynamic linker (ld-linux-x86-64.so.2)".into())
+}
+
+fn linux_shared_lib(name: &str) -> Result<PathBuf, String> {
+    let candidates = [
+        format!("/lib/x86_64-linux-gnu/{name}"),
+        format!("/usr/lib/x86_64-linux-gnu/{name}"),
+        format!("/lib64/{name}"),
+        format!("/usr/lib64/{name}"),
+    ];
+    candidates.into_iter().map(PathBuf::from)
+        .find(|p| p.is_file())
+        .ok_or_else(|| format!("rcl: cannot locate required system library {name}"))
+}
+
+fn lower_to_object(ll: &Path, obj: &Path) -> Result<(), String> {
+    let llc = llvm_tool("llc")?;
+    let status = Command::new(&llc)
+        .arg("-filetype=obj")
+        .arg("-O2")
+        .arg(ll)
+        .arg("-o")
+        .arg(obj)
+        .status()
+        .map_err(|e| format!("rcl: cannot execute bundled llc: {e}"))?;
+    if !status.success() {
+        return Err("rcl: bundled LLVM code generator (llc) failed".into());
+    }
+    Ok(())
+}
+
+fn link_native(obj: &Path, runtime: &Path, out: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let linker = llvm_tool("lld-link")?;
+        let status = Command::new(&linker)
+            .arg("/subsystem:console")
+            .arg("/entry:mainCRTStartup")
+            .arg(format!("/out:{}", out.display()))
+            .arg(obj)
+            .arg(runtime)
+            .arg("kernel32.lib")
+            .arg("user32.lib")
+            .arg("advapi32.lib")
+            .arg("ws2_32.lib")
+            .status()
+            .map_err(|e| format!("rcl: cannot execute bundled lld-link: {e}"))?;
+        if !status.success() {
+            return Err("rcl: bundled LLVM linker (lld-link) failed".into());
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let linker = llvm_tool("ld.lld")?;
+        let dynamic = dynamic_linker()?;
+        let libc = linux_shared_lib("libc.so.6")?;
+        let libm = linux_shared_lib("libm.so.6")?;
+        let libdl = linux_shared_lib("libdl.so.2")?;
+        let libpthread = linux_shared_lib("libpthread.so.0")?;
+
+        let status = Command::new(&linker)
+            .arg("-o").arg(out)
+            .arg("-e").arg("_start")
+            .arg("-dynamic-linker").arg(dynamic)
+            .arg(obj)
+            .arg(runtime)
+            .arg(libc)
+            .arg(libm)
+            .arg(libdl)
+            .arg(libpthread)
+            .status()
+            .map_err(|e| format!("rcl: cannot execute bundled ld.lld: {e}"))?;
+        if !status.success() {
+            return Err("rcl: bundled LLVM linker (ld.lld) failed".into());
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (obj, runtime, out);
+        Err("rcl: this release currently supports native linking on Linux x86_64 and Windows x86_64".into())
+    }
 }
 
 fn build_native(source: &str) -> Result<PathBuf, String> {
     let ll = build_llvm(source)?;
     let runtime = runtime_library()?;
     let out = executable_path(source);
-    let clang = native_compiler()?;
-    let toolchain = toolchain_dir()?;
-    let toolchain_bin = clang.parent().ok_or_else(|| "rcl: invalid bundled toolchain".to_string())?;
+    let obj = object_path(source);
 
-    let mut path = toolchain_bin.as_os_str().to_os_string();
-    if let Some(system_path) = env::var_os("PATH") {
-        path.push(if cfg!(windows) { ";" } else { ":" });
-        path.push(system_path);
-    }
-
-    let mut command = Command::new(&clang);
-    command
-        .env("PATH", path)
-        .arg("-fuse-ld=lld")
-        .arg("-x").arg("ir").arg(&ll)
-        .arg("-x").arg("none").arg(&runtime)
-        .arg("-o").arg(&out);
-
-    #[cfg(target_os = "linux")]
-    {
-        let toolchain_lib = toolchain.join("lib");
-        let mut ld_library_path = toolchain_lib.as_os_str().to_os_string();
-        if let Some(system_path) = env::var_os("LD_LIBRARY_PATH") {
-            ld_library_path.push(":");
-            ld_library_path.push(system_path);
-        }
-        command.env("LD_LIBRARY_PATH", ld_library_path);
-    }
-
-    let status = command
-        .status()
-        .map_err(|e| format!("rcl: cannot execute bundled native toolchain: {e}"))?;
-
-    if !status.success() {
-        return Err("rcl: bundled native toolchain failed while producing the executable".into());
-    }
+    lower_to_object(&ll, &obj)?;
+    link_native(&obj, &runtime, &out)?;
     Ok(out)
 }
 
@@ -145,7 +210,7 @@ fn new_project(name: &str) -> Result<(), String> {
     if root.exists() { return Err(format!("rcl: directory already exists: {}", root.display())); }
 
     fs::create_dir_all(root.join("src")).map_err(|e| format!("rcl: cannot create project: {e}"))?;
-    fs::write(root.join("rcl.toml"), format!("[package]\nname = \"{name}\"\nversion = \"0.1.2\"\n"))
+    fs::write(root.join("rcl.toml"), format!("[package]\nname = \"{name}\"\nversion = \"0.1.3\"\n"))
         .map_err(|e| format!("rcl: cannot write rcl.toml: {e}"))?;
     fs::write(root.join("src/main.rcl"), "fn main() {\n    println(\"Hello, Recontrol!\")\n}\n")
         .map_err(|e| format!("rcl: cannot write src/main.rcl: {e}"))?;
@@ -154,14 +219,14 @@ fn new_project(name: &str) -> Result<(), String> {
 }
 
 fn print_help() {
-    println!("Recontrol Lang compiler 0.1.2");
+    println!("Recontrol Lang compiler 0.1.3");
     println!();
     println!("Usage:");
     println!("  rcl check <file.rcl>       Check source without producing an executable");
     println!("  rcl build <file.rcl>       Build a native executable");
     println!("  rcl run <file.rcl>         Build and run a native executable");
     println!("  rcl emit-llvm <file.rcl>   Emit LLVM IR");
-    println!("  rcl new <name>              Create a new project");
+    println!("  rcl new <name>             Create a new project");
     println!("  rcl --version               Show compiler version");
     println!("  rcl --help                  Show this help");
 }
@@ -169,7 +234,7 @@ fn print_help() {
 fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some("--version") | Some("-V") => println!("recontrolc 0.1.2"),
+        Some("--version") | Some("-V") => println!("recontrolc 0.1.3"),
         Some("--help") | Some("-h") | None => print_help(),
         Some("new") => match args.next() {
             Some(name) => { if let Err(e) = new_project(&name) { eprintln!("{e}"); std::process::exit(1); } }
