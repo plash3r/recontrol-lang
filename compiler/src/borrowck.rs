@@ -365,7 +365,7 @@ impl BorrowChecker {
         self.active.entry(target).or_default().push(ActiveBorrow {
             kind,
             scope: self.scope,
-            holder,
+            holder: holder.clone(),
         });
         if let Some(holder) = holder {
             let _ = env.is_reference(&holder);
