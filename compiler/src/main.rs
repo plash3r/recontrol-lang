@@ -75,18 +75,53 @@ fn runtime_library() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn toolchain_dir() -> Result<PathBuf, String> {
+    let exe = env::current_exe().map_err(|e| format!("rcl: cannot locate compiler executable: {e}"))?;
+    let dir = exe.parent().ok_or_else(|| "rcl: compiler has no executable directory".to_string())?;
+    let path = dir.join("rcl-toolchain");
+    if !path.is_dir() {
+        return Err(format!("rcl: bundled native toolchain not found: {}", path.display()));
+    }
+    Ok(path)
+}
+
+fn native_compiler() -> Result<PathBuf, String> {
+    let toolchain = toolchain_dir()?;
+    #[cfg(windows)]
+    let path = toolchain.join("bin").join("clang.exe");
+    #[cfg(not(windows))]
+    let path = toolchain.join("bin").join("clang");
+    if !path.is_file() {
+        return Err(format!("rcl: bundled clang not found: {}", path.display()));
+    }
+    Ok(path)
+}
+
 fn build_native(source: &str) -> Result<PathBuf, String> {
     let ll = build_llvm(source)?;
     let runtime = runtime_library()?;
     let out = executable_path(source);
+    let clang = native_compiler()?;
+    let toolchain_bin = clang.parent().ok_or_else(|| "rcl: invalid bundled toolchain".to_string())?;
 
-    let status = Command::new("clang")
+    let mut path = toolchain_bin.as_os_str().to_os_string();
+    if let Some(system_path) = env::var_os("PATH") {
+        path.push(if cfg!(windows) { ";" } else { ":" });
+        path.push(system_path);
+    }
+
+    let status = Command::new(&clang)
+        .env("PATH", path)
+        .arg("-fuse-ld=lld")
         .arg("-x").arg("ir").arg(&ll)
         .arg("-x").arg("none").arg(&runtime)
-        .arg("-o").arg(&out).status()
-        .map_err(|e| format!("rcl: cannot execute clang: {e}"))?;
+        .arg("-o").arg(&out)
+        .status()
+        .map_err(|e| format!("rcl: cannot execute bundled native toolchain: {e}"))?;
 
-    if !status.success() { return Err("rcl: clang failed while producing the native executable".into()); }
+    if !status.success() {
+        return Err("rcl: bundled native toolchain failed while producing the executable".into());
+    }
     Ok(out)
 }
 
@@ -95,7 +130,7 @@ fn new_project(name: &str) -> Result<(), String> {
     if root.exists() { return Err(format!("rcl: directory already exists: {}", root.display())); }
 
     fs::create_dir_all(root.join("src")).map_err(|e| format!("rcl: cannot create project: {e}"))?;
-    fs::write(root.join("rcl.toml"), format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"))
+    fs::write(root.join("rcl.toml"), format!("[package]\nname = \"{name}\"\nversion = \"0.1.2\"\n"))
         .map_err(|e| format!("rcl: cannot write rcl.toml: {e}"))?;
     fs::write(root.join("src/main.rcl"), "fn main() {\n    println(\"Hello, Recontrol!\")\n}\n")
         .map_err(|e| format!("rcl: cannot write src/main.rcl: {e}"))?;
@@ -104,7 +139,7 @@ fn new_project(name: &str) -> Result<(), String> {
 }
 
 fn print_help() {
-    println!("Recontrol Lang compiler 0.1.0");
+    println!("Recontrol Lang compiler 0.1.2");
     println!();
     println!("Usage:");
     println!("  rcl check <file.rcl>       Check source without producing an executable");
@@ -119,7 +154,7 @@ fn print_help() {
 fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some("--version") | Some("-V") => println!("recontrolc 0.1.0"),
+        Some("--version") | Some("-V") => println!("recontrolc 0.1.2"),
         Some("--help") | Some("-h") | None => print_help(),
         Some("new") => match args.next() {
             Some(name) => { if let Err(e) = new_project(&name) { eprintln!("{e}"); std::process::exit(1); } }
