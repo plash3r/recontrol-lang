@@ -7,6 +7,7 @@ pub mod lexer;
 pub mod mir;
 pub mod mir_validate;
 pub mod mir_move;
+pub mod mir_borrow;
 pub mod parser;
 pub mod sema;
 pub mod types;
