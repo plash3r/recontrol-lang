@@ -16,6 +16,7 @@ struct Cx<'a> {
     locals: HashMap<usize, Type>,
     next: usize,
     strings: Vec<(String, Vec<u8>)>,
+    pending: String,
 }
 
 impl LlvmBackend {
@@ -32,6 +33,7 @@ impl LlvmBackend {
                 locals: function.locals.iter().map(|l| (l.id, l.ty.clone())).collect(),
                 next: 0,
                 strings: Vec::new(),
+                pending: String::new(),
             };
             match cx.emit_function() {
                 Ok(text) => functions.push_str(&text),
@@ -82,15 +84,14 @@ impl<'a> Cx<'a> {
             MirStatement::StorageLive(_) | MirStatement::StorageDead(_) => Ok(String::new()),
             MirStatement::Assign { place, rvalue } => {
                 let v = self.rvalue(rvalue)?;
+                let pending = self.take_pending();
                 let ty = self.place_type(place)?;
                 let p = self.place(place)?;
-                Ok(format!("  store {} {}, ptr {}\n", llvm_type(&ty), v, p))
+                Ok(format!("{pending}  store {} {}, ptr {}\n", llvm_type(&ty), v, p))
             }
             MirStatement::Evaluate(rvalue) => {
-                let value = self.rvalue(rvalue)?;
-                if value.starts_with("  ") { Ok(value) }
-                else if value.contains(" = ") { Ok(format!("  {value}\n")) }
-                else { Ok(String::new()) }
+                let _value = self.rvalue(rvalue)?;
+                Ok(self.take_pending())
             }
         }
     }
@@ -100,7 +101,8 @@ impl<'a> Cx<'a> {
             Terminator::Goto(id) => Ok(format!("  br label %bb{id}\n")),
             Terminator::SwitchBool { condition, then_block, else_block } => {
                 let c = self.operand(condition)?;
-                Ok(format!("  br i1 {c}, label %bb{then_block}, label %bb{else_block}\n"))
+                let pending = self.take_pending();
+                Ok(format!("{pending}  br i1 {c}, label %bb{then_block}, label %bb{else_block}\n"))
             }
             Terminator::Return(None) => {
                 if self.function.name == "main" && self.return_type_of(self.function) == Type::Unit {
@@ -114,7 +116,9 @@ impl<'a> Cx<'a> {
             Terminator::Return(Some(v)) => {
                 let ty = self.return_type();
                 if ty == Type::Unit { return Err(vec![self.err("value returned from unit function")]); }
-                Ok(format!("  ret {} {}\n", llvm_type(&ty), self.rvalue(v)?))
+                let value = self.rvalue(v)?;
+                let pending = self.take_pending();
+                Ok(format!("{pending}  ret {} {}\n", llvm_type(&ty), value))
             }
             Terminator::Unreachable => Ok("  unreachable\n".into()),
         }
@@ -124,11 +128,25 @@ impl<'a> Cx<'a> {
         match v {
             Rvalue::Use(o) => self.operand(o),
             Rvalue::Unary { op, operand } => {
-                let x = self.operand(operand)?; let ty = self.operand_type(operand)?;
+                let x = self.operand(operand)?;
+                let ty = self.operand_type(operand)?;
                 match op {
                     UnaryOp::Plus => Ok(x),
-                    UnaryOp::Minus => { let n=self.tmp(); if is_float(&ty) { Ok(format!("%{n} = fneg {} {x}",llvm_type(&ty))) } else { Ok(format!("%{n} = sub {} 0, {x}",llvm_type(&ty))) } }
-                    UnaryOp::Not => { let n=self.tmp(); Ok(format!("%{n} = xor i1 {x}, true")) }
+                    UnaryOp::Minus => {
+                        let n=self.tmp();
+                        let ins = if is_float(&ty) {
+                            format!("%{n} = fneg {} {x}", llvm_type(&ty))
+                        } else {
+                            format!("%{n} = sub {} 0, {x}", llvm_type(&ty))
+                        };
+                        writeln!(self.pending, "  {ins}").unwrap();
+                        Ok(format!("%{n}"))
+                    }
+                    UnaryOp::Not => {
+                        let n=self.tmp();
+                        writeln!(self.pending, "  %{n} = xor i1 {x}, true").unwrap();
+                        Ok(format!("%{n}"))
+                    }
                     UnaryOp::BorrowShared | UnaryOp::BorrowMutable => self.err_result("borrow rvalue unsupported"),
                 }
             }
@@ -163,7 +181,8 @@ impl<'a> Cx<'a> {
                 BinaryOp::Or=>format!("or i1 {a}, {b}"),
             }
         };
-        Ok(format!("%{t} = {s}"))
+        writeln!(self.pending, "  %{t} = {s}").unwrap();
+        Ok(format!("%{t}"))
     }
 
     fn call(&mut self, callee: &Operand, args: &[Operand]) -> Result<String, Vec<CodegenError>> {
@@ -172,32 +191,20 @@ impl<'a> Cx<'a> {
         if (*id==BUILTIN_PRINT_ID || *id==BUILTIN_PRINTLN_ID) && (args.len()!=1 || self.operand_type(&args[0])? != Type::Str) {
             return self.err_result("print/println currently require a str argument");
         }
-        // Operands can themselves require LLVM instructions (for example, a
-        // local variable is represented by a load).  Those instructions must
-        // be emitted before the call; LLVM does not allow an instruction such
-        // as "%0 = load ..." inline inside a call argument list.
-        let mut prelude=String::new();
         let mut rendered=Vec::new();
         for (i,a) in args.iter().enumerate() {
             let ty=params.get(i).cloned().unwrap_or(self.operand_type(a)?);
-            let v=match a {
-                Operand::Copy(p)|Operand::Move(p) => {
-                    let p=self.place(p)?;
-                    let t=self.tmp();
-                    writeln!(prelude, "  %{t} = load {}, ptr {p}", llvm_type(&ty)).unwrap();
-                    format!("%{t}")
-                }
-                _ => self.operand(a)?,
-            };
+            let v=self.operand(a)?;
             rendered.push(format!("{} {}",llvm_type(&ty),v));
         }
         let text=rendered.join(", ");
         if ret==Type::Unit {
-            Ok(format!("{prelude}  call void @{name}({text})\n"))
-        }
-        else {
+            writeln!(self.pending, "  call void @{name}({text})").unwrap();
+            Ok(String::new())
+        } else {
             let t=self.tmp();
-            Ok(format!("{prelude}%{t} = call {} @{name}({text})\n",llvm_type(&ret)))
+            writeln!(self.pending, "  %{t} = call {} @{name}({text})",llvm_type(&ret)).unwrap();
+            Ok(format!("%{t}"))
         }
     }
 
@@ -210,19 +217,8 @@ impl<'a> Cx<'a> {
             }
             Operand::Copy(p)|Operand::Move(p)=>{
                 let ty=self.place_type(p)?; let p=self.place(p)?; let t=self.tmp();
-                Ok(format!("%{t} = load {}, ptr {p}",llvm_type(&ty)))
-            }
-        }
-    }
-
-    fn literal(&mut self, x: &Literal) -> Result<String, Vec<CodegenError>> {
-        match x {
-            Literal::Bool(v)=>Ok(if *v{"true".into()}else{"false".into()}),
-            Literal::Number(n)=>Ok(split_number(n).0.to_string()),
-            Literal::String(s)=>{
-                let bytes=s.as_bytes().iter().copied().chain([0]).collect::<Vec<_>>();
-                let name=self.intern_string(bytes.clone());
-                Ok(format!("getelementptr inbounds ([{} x i8], ptr {}, i64 0, i64 0)",bytes.len(),name))
+                writeln!(self.pending, "  %{t} = load {}, ptr {p}",llvm_type(&ty)).unwrap();
+                Ok(format!("%{t}"))
             }
         }
     }
@@ -296,6 +292,7 @@ impl<'a> Cx<'a> {
     }
 
     fn tmp(&mut self)->usize { let n=self.next; self.next+=1; n }
+    fn take_pending(&mut self)->String { std::mem::take(&mut self.pending) }
     fn err(&self,msg:&str)->CodegenError { CodegenError{function:self.function.name.clone(),message:msg.into()} }
     fn err_result<T>(&self,msg:&str)->Result<T,Vec<CodegenError>> { Err(vec![self.err(msg)]) }
 }
@@ -339,6 +336,7 @@ mod tests {
         let llvm = LlvmBackend::emit(&mir).unwrap();
         assert!(llvm.contains("define i32 @rcl_add"));
         assert!(llvm.contains("call i32 @rcl_add"));
+        assert!(!llvm.contains("= load i32, ptr %l0)"));
     }
 
     #[test]
