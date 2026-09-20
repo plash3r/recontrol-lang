@@ -292,3 +292,24 @@ fn llvm_type(t:&Type)->String { match t {
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{hir::HirLowerer, lexer::Lexer, mir::MirLowerer, mir_opt::MirOptimizer, parser::Parser, sema::SemanticAnalyzer};
+
+    #[test]
+    fn emits_hello_world_llvm() {
+        let source = "fn main(){let message:str="Hello" println(message)}";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("define void @main()"));
+        assert!(llvm.contains("@rcl_println"));
+        assert!(llvm.contains("Hello"));
+    }
+}
