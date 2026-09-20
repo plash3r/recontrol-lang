@@ -23,27 +23,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - name: Package VSIX
         run: npx --yes @vscode/vsce package --no-dependencies
+
       - name: Validate VSIX
         run: |
           test -n "$(find . -maxdepth 1 -name '*.vsix' -print -quit)"
           unzip -t ./*.vsix >/dev/null
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: recontrol-lang-vscode
           path: vscode-extension/*.vsix
           if-no-files-found: error
-      - name: Upload VSIX to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/vscode-v')
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/vscode-v') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[vscode-release]'))
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: recontrol-lang-vscode
+          path: dist
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Recontrol Lang VS Code ${{ github.ref_name }}
+          tag_name: vscode-v0.1.0
+          target_commitish: ${{ github.sha }}
+          name: Recontrol Lang VS Code v0.1.0
           generate_release_notes: true
-          files: vscode-extension/*.vsix
+          files: dist/*.vsix
