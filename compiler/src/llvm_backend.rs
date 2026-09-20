@@ -299,6 +299,20 @@ mod tests {
     use crate::{hir::HirLowerer, lexer::Lexer, mir::MirLowerer, mir_opt::MirOptimizer, parser::Parser, sema::SemanticAnalyzer};
 
     #[test]
+    fn emits_direct_function_call() {
+        let source = "fn add(a:i32,b:i32)->i32{return a+b} fn main(){let x:i32=add(1,2)}";
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("define i32 @rcl_add"));
+        assert!(llvm.contains("call i32 @rcl_add"));
+    }
+
+    #[test]
     fn emits_hello_world_llvm() {
         let source = "fn main(){let message:str="Hello" println(message)}";
         let tokens = Lexer::new(source).tokenize().unwrap();
