@@ -16,6 +16,26 @@ cargo run -p rcl -- run examples/hello.rcl
 
 `rcl run` emits LLVM IR, builds the Rust-only `rcl-runtime` static library, links it with `clang`, and runs the native executable. No C runtime source is used.
 
+## Quick start
+
+Requirements:
+- Rust stable toolchain
+- LLVM/Clang available as `clang` in PATH
+
+Build and run the compiler:
+
+```bash
+cargo run -p rcl -- check examples/hello.rcl
+cargo run -p rcl -- build examples/hello.rcl
+cargo run -p rcl -- run examples/hello.rcl
+```
+
+The last command builds the Rust runtime automatically and should print:
+
+```
+Hello, Recontrol!
+```
+
 ## Example
 
 fn main() {
