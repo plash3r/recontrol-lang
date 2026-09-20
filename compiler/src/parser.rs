@@ -318,11 +318,22 @@ impl Parser {
             TokenKind::Bang => Some(UnaryOp::Not),
             TokenKind::Minus => Some(UnaryOp::Minus),
             TokenKind::Plus => Some(UnaryOp::Plus),
+            TokenKind::Ampersand => {
+                self.advance();
+                if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+                    self.advance();
+                    Some(UnaryOp::BorrowMutable)
+                } else {
+                    Some(UnaryOp::BorrowShared)
+                }
+            }
             _ => None,
         };
 
         if let Some(op) = op {
-            self.advance();
+            if !matches!(op, UnaryOp::BorrowShared | UnaryOp::BorrowMutable) {
+                self.advance();
+            }
             return Ok(Expr::Unary { op, expr: Box::new(self.parse_unary()?) });
         }
         self.parse_postfix()
