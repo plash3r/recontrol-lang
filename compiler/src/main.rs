@@ -3,6 +3,7 @@ use std::fs;
 
 use rcl::lexer::Lexer;
 use rcl::parser::Parser;
+use rcl::sema::SemanticAnalyzer;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -35,8 +36,18 @@ fn main() {
                 }
             };
 
-            match Parser::new(tokens).parse() {
-                Ok(program) => println!("OK: parsed successfully ({} top-level item(s))", program.items.len()),
+            let program = match Parser::new(tokens).parse() {
+                Ok(program) => program,
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            match SemanticAnalyzer::check(&program) {
+                Ok(()) => println!("OK: semantic check passed ({} top-level item(s))", program.items.len()),
                 Err(errors) => {
                     for error in errors {
                         eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
