@@ -54,8 +54,17 @@ else
 fi
 
 # Keep this installer dependency-free apart from POSIX tools + curl.
-RELEASE_TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name":[[:space:]]*"\\([^"]*\\)".*/\\1/p' | head -n 1)"
-[ -n "$RELEASE_TAG" ] || die "GitHub returned an invalid release response."
+RELEASE_TAG="$(printf '%s' "$RELEASE_JSON" | awk -F'"' '
+  {
+    for (i = 1; i <= NF; i++) {
+      if ($i == "tag_name" && (i + 2) <= NF) {
+        print $(i + 2)
+        exit
+      }
+    }
+  }
+')"
+[ -n "$RELEASE_TAG" ] || die "GitHub returned an invalid release response (missing tag_name)."
 
 URL="https://github.com/$REPO/releases/download/$RELEASE_TAG/$ASSET"
 CHECKSUM_URL="https://github.com/$REPO/releases/download/$RELEASE_TAG/SHA256SUMS"
