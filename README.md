@@ -8,40 +8,81 @@ RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> O
 
 ## CLI
 
+During compiler development you can run the compiler through Cargo:
+
+```bash
 cargo run -p rcl -- check examples/hello.rcl
-cargo run -p rcl -- build examples/hello.rcl
-cargo run -p rcl -- run examples/hello.rcl
+```
 
-`rcl build` emits LLVM IR next to the source file as `.ll`.
+For a normal standalone installation, install the compiler itself:
 
-`rcl run` emits LLVM IR, builds the Rust-only `rcl-runtime` static library, links it with `clang`, and runs the native executable. No C runtime source is used.
+```bash
+cargo install --path compiler
+```
+
+After installation, Cargo is no longer part of the normal RCL workflow:
+
+```bash
+rcl --version
+rcl check examples/hello.rcl
+rcl build examples/hello.rcl
+rcl run examples/hello.rcl
+```
+
+The `rcl` command works directly with `.rcl` source files.
+
+### Commands
+
+```text
+rcl check <file.rcl>       Check source
+rcl build <file.rcl>       Build a native executable
+rcl run <file.rcl>         Build and run a native executable
+rcl emit-llvm <file.rcl>   Emit LLVM IR
+rcl new <name>             Create a new project
+rcl --version              Show compiler version
+rcl --help                 Show help
+```
+
+`rcl build` produces a native executable next to the source file. LLVM IR can be requested explicitly with `rcl emit-llvm`.
+
+The compiler contains the small Rust runtime required by the current `print` and `println` builtins, so the installed CLI no longer depends on the repository checkout or the workspace `rcl-runtime` package. The runtime is compiled directly with `rustc` and linked by `clang`. No C runtime source is used.
 
 ## Quick start
 
 Requirements:
-- Rust stable toolchain
+- Rust stable toolchain for installing RCL and building its embedded Rust runtime
 - LLVM/Clang available as `clang` in PATH
 
-Build and run the compiler:
+Install:
 
 ```bash
-cargo run -p rcl -- check examples/hello.rcl
-cargo run -p rcl -- build examples/hello.rcl
-cargo run -p rcl -- run examples/hello.rcl
+git clone https://github.com/plash3r/recontrol-lang.git
+cd recontrol-lang
+cargo install --path compiler
 ```
 
-The last command builds the Rust runtime automatically and should print:
+Then:
 
+```bash
+rcl new hello
+cd hello
+rcl run src/main.rcl
 ```
+
+The program should print:
+
+```text
 Hello, Recontrol!
 ```
 
 ## Example
 
+```rcl
 fn main() {
     let message: str = "Hello, Recontrol!"
     println(message)
 }
+```
 
 ## LLVM backend milestone
 
