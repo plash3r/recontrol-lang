@@ -1,6 +1,8 @@
 use std::env;
 use std::fs;
+
 use rcl::lexer::Lexer;
+use rcl::parser::Parser;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -23,8 +25,18 @@ fn main() {
                 }
             };
 
-            match Lexer::new(&source).tokenize() {
-                Ok(tokens) => println!("OK: {} tokens", tokens.len()),
+            let tokens = match Lexer::new(&source).tokenize() {
+                Ok(tokens) => tokens,
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            match Parser::new(tokens).parse() {
+                Ok(program) => println!("OK: parsed successfully ({} top-level item(s))", program.items.len()),
                 Err(errors) => {
                     for error in errors {
                         eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
