@@ -1,0 +1,35 @@
+{
+  "name": "recontrol-lang",
+  "displayName": "Recontrol Lang",
+  "description": "Syntax highlighting and language support for Recontrol Lang (.rcl).",
+  "version": "0.1.0",
+  "publisher": "plash3r",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/plash3r/recontrol-lang.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "recontrol",
+        "aliases": ["Recontrol Lang", "recontrol", "rcl"],
+        "extensions": [".rcl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "recontrol",
+        "scopeName": "source.rcl",
+        "path": "./syntaxes/recontrol.tmLanguage.json"
+      }
+    ]
+  }
+}
