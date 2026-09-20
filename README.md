@@ -14,7 +14,7 @@ cargo run -p rcl -- run examples/hello.rcl
 
 `rcl build` emits LLVM IR next to the source file as `.ll`.
 
-`rcl run` emits LLVM IR, invokes `clang` with `runtime/rcl_runtime.c`, and runs the native executable.
+`rcl run` emits LLVM IR, builds the Rust-only `rcl-runtime` static library, links it with `clang`, and runs the native executable. No C runtime source is used.
 
 ## Example
 
