@@ -43,7 +43,7 @@ pub enum MirStatement {
 pub enum Place {
     Local(LocalId),
     Field { base: Box<Place>, name: String },
-    Index { base: Box<Place>, index: Operand },
+    Index { base: Box<Place>, index: Box<Operand> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -368,7 +368,7 @@ impl MirLowerer {
             HirExprKind::Array(values) => Rvalue::Array(values.iter().map(|e| Self::lower_operand(builder, locals, e)).collect()),
             HirExprKind::Index { object, index } => Rvalue::Use(Operand::Copy(Place::Index {
                 base: Box::new(Self::lower_place(builder, locals, object)),
-                index: Self::lower_operand(builder, locals, index),
+                index: Box::new(Self::lower_operand(builder, locals, index)),
             })),
             HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
         }
