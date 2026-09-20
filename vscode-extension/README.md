@@ -1,25 +1,57 @@
 # Recontrol Lang — VS Code
 
-Syntax highlighting for Recontrol Lang source files.
+Official VS Code language support for Recontrol Lang (.rcl).
 
-## Install locally
+You do **not** need Node.js, npm, Cargo, or the Rust toolchain to install the extension.
 
-From this directory:
+## Install the ready-made extension
 
-```bash
-cd vscode-extension
-npm install
-npx vsce package
+The project automatically builds a `.vsix` package in GitHub Actions.
+
+### Option 1 — download the latest VSIX
+
+Open the repository's **Releases** page and download the latest file named:
+
+`recontrol-lang-<version>.vsix`
+
+Then in VS Code:
+
+1. Press `Ctrl+Shift+X`.
+2. Open the `...` menu.
+3. Select **Install from VSIX...**.
+4. Select the downloaded `.vsix`.
+5. Reload VS Code if prompted.
+
+### Option 2 — install from a terminal
+
+If the VS Code `code` command is available:
+
+**Windows PowerShell**
+```powershell
+.\install.ps1
 ```
 
-Then install the generated `.vsix` in VS Code:
+**Linux / macOS**
+```bash
+chmod +x install.sh
+./install.sh
+```
 
-1. Open **Extensions**.
-2. Click **...**.
-3. Choose **Install from VSIX...**.
-4. Select the generated `.vsix` file.
+The scripts download the latest published VSIX automatically and pass it directly to VS Code. There is nothing to build.
 
-After installation, opening a `.rcl` file automatically selects **Recontrol Lang**.
+## Automatic builds
+
+The repository contains a GitHub Actions workflow at `.github/workflows/vscode-extension.yml`.
+
+It:
+
+- validates the extension manifest;
+- packages the extension with `@vscode/vsce`;
+- uploads the VSIX as a workflow artifact;
+- creates a GitHub Release when a tag matching `vscode-v*` is pushed;
+- attaches the ready-to-install `.vsix` to that release.
+
+For a new extension release, the maintainer only needs to create a version tag such as `vscode-v0.1.0`. The build itself is performed by GitHub Actions.
 
 ## Supported syntax
 
@@ -27,9 +59,20 @@ After installation, opening a `.rcl` file automatically selects **Recontrol Lang
 - Control flow: `if`, `else`, `for`, `while`, `do`, `return`
 - Primitive types: `i8` through `i256`, `u8` through `u256`, `f32`, `f64`, `f128`, `bool`, `char`, `str`, `void`
 - References: `&T`, `&mut T`
-- Numbers with integer suffixes such as `42u64`
+- Integer and floating-point literals
 - Strings and escape sequences
 - `//` comments
 - Operators and punctuation
 - Function definitions and calls
 - Builtins `print` and `println`
+
+## Development
+
+You normally do not need to build the extension yourself.
+
+If you want to work on the extension locally, the package can still be built with:
+
+```bash
+cd vscode-extension
+npx @vscode/vsce package
+```
