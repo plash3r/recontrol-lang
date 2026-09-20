@@ -1,6 +1,5 @@
 use std::env;
 use std::fs;
-
 use rcl::lexer::Lexer;
 
 fn main() {
@@ -24,9 +23,14 @@ fn main() {
                 }
             };
 
-            let tokens = Lexer::new(&source).tokenize();
-            for token in tokens {
-                println!("{token:?}");
+            match Lexer::new(&source).tokenize() {
+                Ok(tokens) => println!("OK: {} tokens", tokens.len()),
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("error: {}:{}: {}", error.span.line, error.span.column, error.message);
+                    }
+                    std::process::exit(1);
+                }
             }
         }
         _ => {
