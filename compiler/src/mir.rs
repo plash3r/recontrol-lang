@@ -320,7 +320,7 @@ impl MirLowerer {
         Rvalue::Binary {
             left: Self::lower_operand(target),
             op: binary_op,
-            right: Operand::Constant(Literal::Integer("1".to_string())),
+            right: Operand::Constant(Literal::Number("1".to_string())),
         }
     }
 
