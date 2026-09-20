@@ -223,6 +223,18 @@ impl<'a> Cx<'a> {
         }
     }
 
+    fn literal(&mut self, x: &Literal) -> Result<String, Vec<CodegenError>> {
+        match x {
+            Literal::Bool(v)=>Ok(if *v{"true".into()}else{"false".into()}),
+            Literal::Number(n)=>Ok(split_number(n).0.to_string()),
+            Literal::String(s)=>{
+                let bytes=s.as_bytes().iter().copied().chain([0]).collect::<Vec<_>>();
+                let name=self.intern_string(bytes.clone());
+                Ok(format!("getelementptr inbounds ([{} x i8], ptr {}, i64 0, i64 0)",bytes.len(),name))
+            }
+        }
+    }
+
     fn place(&self,p:&Place)->Result<String,Vec<CodegenError>> {
         match p { Place::Local(id)=>Ok(format!("%l{id}")), _=>self.err_result("field/index places are not yet supported") }
     }
