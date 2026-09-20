@@ -153,10 +153,6 @@ impl MirLowerer {
                     } {
                         dead_at_entry.entry(successor).or_default().push(temp);
                     }
-                } else {
-                    if let Some(target) = function.blocks.iter().find(|b| b.id == block.id) {
-                        let _ = target.id;
-                    }
                 }
             }
         }
@@ -265,6 +261,12 @@ impl MirLowerer {
 
         let temp_start = locals.iter().map(|local| local.id).max().map(|id| id + 1).unwrap_or(0);
         let mut builder = Builder::new();
+
+        // Parameters are live for the whole function body.
+        for param in &function.params {
+            builder.statement(MirStatement::StorageLive(param.local));
+        }
+
         Self::lower_block(&mut builder, &function.body, &mut locals);
         if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
             builder.finish_block(Terminator::Return(None));
