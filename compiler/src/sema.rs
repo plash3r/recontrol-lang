@@ -93,7 +93,7 @@ impl SemanticAnalyzer {
             Stmt::If{condition,then_branch,else_branch}=>{let t=self.expr(condition,e);if t!=Type::Bool{self.error(format!("if condition must be bool, found {}",t.display_name()));}self.check_block(then_branch,e,r);if let Some(x)=else_branch{self.check_stmt(x,e,r);}}
             Stmt::While{condition,body}=>{let t=self.expr(condition,e);if t!=Type::Bool{self.error(format!("while condition must be bool, found {}",t.display_name()));}self.check_block(body,e,r);}
             Stmt::DoWhile{body,condition}=>{self.check_block(body,e,r);let t=self.expr(condition,e);if t!=Type::Bool{self.error(format!("do while condition must be bool, found {}",t.display_name()));}}
-            Stmt::For{initializer,condition,update,body}=>{e.push();if let Some(x)=initializer{self.check_stmt(x,e,r)}if let Some(x)=condition{let t=self.expr(x,e);if t!=Type::Bool{self.error(format!("for condition must be bool, found {}",t.display_name()));}}if let Some(x)=update{self.expr(x,e)}self.check_block(body,e,r);e.pop();}
+            Stmt::For{initializer,condition,update,body}=>{e.push();if let Some(x)=initializer{self.check_stmt(x,e,r)}if let Some(x)=condition{let t=self.expr(x,e);if t!=Type::Bool{self.error(format!("for condition must be bool, found {}",t.display_name()));}}if let Some(x)=update{self.expr(x,e);}self.check_block(body,e,r);e.pop();}
             Stmt::Block(b)=>self.check_block(b,e,r),
         }
     }
