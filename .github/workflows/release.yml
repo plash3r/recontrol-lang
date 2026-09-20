@@ -52,7 +52,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/rcl_runtime.lib"
             cp "C:/Program Files/LLVM/bin/clang.exe" "dist/rcl-toolchain/bin/clang.exe"
             cp "C:/Program Files/LLVM/bin/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
-            cp C:/Program\\ Files/LLVM/bin/*.dll dist/rcl-toolchain/bin/
+            cp "C:/Program Files/LLVM/bin/"*.dll dist/rcl-toolchain/bin/
             cp -r "C:/Program Files/LLVM/lib/clang" dist/rcl-toolchain/lib/
             (cd dist && 7z a -tzip "rcl-toolchain-windows-x86_64.zip" rcl-toolchain >/dev/null)
           else
@@ -73,9 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/*        with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          path: dist/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
