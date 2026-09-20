@@ -53,7 +53,6 @@ jobs:
             cp "C:/Program Files/LLVM/bin/llc.exe" "dist/rcl-toolchain/bin/llc.exe"
             cp "C:/Program Files/LLVM/bin/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
             cp "C:/Program Files/LLVM/bin/"*.dll dist/rcl-toolchain/bin/
-            cp -r "C:/Program Files/LLVM/lib/clang" dist/rcl-toolchain/lib/
             (cd dist && 7z a -tzip "rcl-toolchain-windows-x86_64.zip" rcl-toolchain >/dev/null)
           else
             cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
@@ -62,7 +61,6 @@ jobs:
             llvm_root="$(dirname "$(dirname "$llc_bin")")"
             cp "$llc_bin" "dist/rcl-toolchain/bin/llc"
             cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
-            cp -r "$llvm_root/lib/clang" dist/rcl-toolchain/lib/
 
             # Bundle the non-glibc shared libraries needed by LLVM tools.
             declare -A seen=()
