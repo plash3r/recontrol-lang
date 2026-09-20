@@ -4,7 +4,7 @@ Recontrol Lang (RCL) — native systems programming language with a Rust compile
 
 ## Install
 
-The easiest way to install RCL is from a GitHub Release. The installer downloads a prebuilt rcl compiler, so users do not need Rust or Cargo to install the compiler.
+The easiest way to install RCL is from a GitHub Release. The installer downloads a prebuilt compiler, detects the platform, verifies the release checksum when available, installs atomically, and does not require Rust or Cargo.
 
 ### Linux x86_64
 
@@ -12,7 +12,7 @@ The easiest way to install RCL is from a GitHub Release. The installer downloads
 curl -fsSL https://raw.githubusercontent.com/plash3r/recontrol-lang/main/install.sh | sh
 ~~~
 
-The installer places rcl in ~/.local/bin.
+The installer places rcl in ~/.local/bin. You can select a release with RCL_VERSION and a custom directory with RCL_INSTALL_DIR.
 
 If needed:
 
@@ -28,9 +28,11 @@ Run PowerShell:
 irm https://raw.githubusercontent.com/plash3r/recontrol-lang/main/install.ps1 | iex
 ~~~
 
-The installer places rcl.exe in %USERPROFILE%\\.rcl\\bin and adds that directory to the user PATH.
+The installer places rcl.exe in %USERPROFILE%\\.rcl\\bin, adds that directory to the user PATH, and verifies the release checksum when available.
 
 Open a new terminal afterwards.
+
+For a specific release, set RCL_VERSION before running the installer. Private repositories can be installed by setting RCL_GITHUB_TOKEN (or GH_TOKEN) in the environment.
 
 ### Verify installation
 
