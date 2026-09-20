@@ -51,6 +51,8 @@ jobs:
           status=$?
           set -e
           cat smoke.out
+          echo "native_exit_status=$status"
+          echo "native_output=$(cat smoke.out)"
           test $status -eq 0
           test "$(cat smoke.out)" = "Hello, Recontrol!"
 
