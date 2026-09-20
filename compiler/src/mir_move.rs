@@ -45,7 +45,7 @@ impl MirMoveAnalyzer {
         for local in function.locals.iter().take(function.param_count) {
             initial.locals.insert(local.id, LocalState::Initialized);
         }
-        in_states.insert(0, initial);
+        in_states.insert(0, initial.clone());
 
         let mut queue = VecDeque::from([0]);
         let mut queued: HashSet<BasicBlockId> = HashSet::from([0]);
