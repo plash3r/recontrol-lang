@@ -30,21 +30,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install clang
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang
-
-      - name: Install LLVM/Clang
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install llvm -y
-          if (-not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
-            throw "clang.exe is not available on PATH"
-          }
-          clang --version
-          rustc --version
-
       - name: Build compiler
         run: cargo build --release --package rcl --target ${{ matrix.target }}
 
