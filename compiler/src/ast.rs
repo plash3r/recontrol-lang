@@ -2,7 +2,10 @@
 pub struct Program { pub items: Vec<Item> }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Item { Function(Function), Struct(StructDef) }
+pub enum Item { Function(Function), Struct(StructDef), Impl(ImplBlock) }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock { pub type_name: String, pub methods: Vec<Function> }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -47,6 +50,9 @@ pub enum Expr {
     Member { object: Box<Expr>, name: String },
     Postfix { expr: Box<Expr>, op: PostfixOp },
     Grouping(Box<Expr>),
+    StructLiteral { name: String, fields: Vec<(String, Expr)> },
+    Array(Vec<Expr>),
+    Index { object: Box<Expr>, index: Box<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,4 +72,7 @@ pub enum BinaryOp {
 pub enum PostfixOp { Increment, Decrement }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef { pub name: String }
+pub struct TypeRef { pub name: String, pub reference: ReferenceKind }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceKind { Value, Shared, Mutable }
