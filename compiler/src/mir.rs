@@ -12,6 +12,7 @@ pub struct MirProgram {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirFunction {
     pub name: String,
+    pub param_count: usize,
     pub locals: Vec<MirLocal>,
     pub blocks: Vec<BasicBlock>,
 }
@@ -274,6 +275,7 @@ impl MirLowerer {
 
         let mut result = MirFunction {
             name: function.name.clone(),
+            param_count: function.params.len(),
             locals,
             blocks: builder.blocks,
         };
