@@ -1,0 +1,18 @@
+name: Remove obsolete v0.1.2 release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  delete-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete obsolete release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete v0.1.2 --cleanup-tag --yes --repo ${{ github.repository }}
