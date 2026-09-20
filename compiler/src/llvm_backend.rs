@@ -286,7 +286,7 @@ fn is_float(t:&Type)->bool { matches!(t,Type::F32|Type::F64|Type::F128) }
 fn unsigned(t:&Type)->bool { matches!(t,Type::U8|Type::U16|Type::U32|Type::U64|Type::U128|Type::U256) }
 fn llvm_type(t:&Type)->String { match t {
     Type::I8|Type::U8=>"i8", Type::I16|Type::U16=>"i16", Type::I32|Type::U32|Type::Char=>"i32",
-    Type::I64|Type::U64|Type::Usize=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
+    Type::I64|Type::U64=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
     Type::F32=>"float",Type::F64=>"double",Type::F128=>"fp128",Type::Bool=>"i1",Type::Str|Type::Reference{..}=>"ptr",
     Type::Unit=>"void",Type::Named(n)=>return format!("%\"{}\" ",n).trim_end().to_string(),Type::Array(_)|Type::Unknown=>"ptr"
 }.into() }
