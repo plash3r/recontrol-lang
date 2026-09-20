@@ -441,6 +441,7 @@ mod tests {
     #[test]
     fn use_before_storage_live_is_rejected() {
         let function = MirFunction {
+            param_count: 0,
             name: "bad".into(),
             locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
             blocks: vec![crate::mir::BasicBlock {
