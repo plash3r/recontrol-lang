@@ -36,7 +36,11 @@ jobs:
       - name: Install LLVM
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install llvm -y
+        run: |
+          choco install llvm -y
+          $llc = (Get-Command llc.exe -ErrorAction Stop).Source
+          $llvmBin = Split-Path -Parent $llc
+          "LLVM_BIN=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build RCL and bundled runtime
         run: |
@@ -50,19 +54,17 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/rcl_runtime.lib"
-            cp "C:/Program Files/LLVM/bin/llc.exe" "dist/rcl-toolchain/bin/llc.exe"
-            cp "C:/Program Files/LLVM/bin/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
-            cp "C:/Program Files/LLVM/bin/"*.dll dist/rcl-toolchain/bin/
+            cp "$LLVM_BIN/llc.exe" "dist/rcl-toolchain/bin/llc.exe"
+            cp "$LLVM_BIN/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
+            cp "$LLVM_BIN/"*.dll dist/rcl-toolchain/bin/
             (cd dist && 7z a -tzip "rcl-toolchain-windows-x86_64.zip" rcl-toolchain >/dev/null)
           else
             cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/librcl_runtime.a" "dist/librcl_runtime.a"
             llc_bin="$(readlink -f "$(command -v llc)")"
-            llvm_root="$(dirname "$(dirname "$llc_bin")")"
             cp "$llc_bin" "dist/rcl-toolchain/bin/llc"
             cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
 
-            # Bundle the non-glibc shared libraries needed by LLVM tools.
             declare -A seen=()
             copy_runtime_deps() {
               local file="$1"
