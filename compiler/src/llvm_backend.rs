@@ -351,7 +351,7 @@ mod tests {
         let mut mir = MirLowerer::lower(&hir);
         MirOptimizer::optimize(&mut mir);
         let llvm = LlvmBackend::emit(&mir).unwrap();
-        assert!(llvm.contains("define void @main()"));
+        assert!(!llvm.contains("define void @main()"));
         assert!(llvm.contains("@rcl_println"));
         assert!(llvm.contains("Hello"));
         assert!(llvm.contains("define i32 @main()"));
