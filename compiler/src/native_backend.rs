@@ -93,7 +93,7 @@ fn rv(e:&mut E,p:&MirProgram,f:&MirFunction,v:&Rvalue)->Result<(),String>{
     match v{
         Rvalue::Use(o)=>op(e,f,o),
         Rvalue::Unary{op:u,operand}=>{op(e,f,operand)?;match u{UnaryOp::Plus=>{},UnaryOp::Minus=>e.w(&[0x48,0xf7,0xd8]),UnaryOp::Not=>e.w(&[0x48,0x83,0xf0,1]),_=>return Err("references unsupported".into())}Ok(())},
-        Rvalue::Binary{left,op:u,right}=>{op(e,f,left)?;e.push(&[0]);op(e,f,right)?;e.rr(3,0);e.pop_reg(0);match u{
+        Rvalue::Binary{left,op:u,right}=>{op(e,f,left)?;e.push_reg(0);op(e,f,right)?;e.rr(3,0);e.pop_reg(0);match u{
             BinaryOp::Add=>e.w(&[0x48,1,0xd8]),BinaryOp::Subtract=>e.w(&[0x48,0x29,0xd8]),BinaryOp::Multiply=>e.w(&[0x48,0x0f,0xaf,0xc3]),
             BinaryOp::Divide=>{e.rr(3,0);e.w(&[0x48,0x99,0x48,0xf7,0xfb])},BinaryOp::Modulo=>{e.rr(3,0);e.w(&[0x48,0x99,0x48,0xf7,0xfb]);e.rr(0,2)},
             BinaryOp::And=>e.w(&[0x48,0x21,0xd8]),BinaryOp::Or=>e.w(&[0x48,9,0xd8]),
