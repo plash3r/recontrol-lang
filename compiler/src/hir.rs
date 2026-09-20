@@ -6,6 +6,10 @@ pub type FunctionId = usize;
 pub type LocalId = usize;
 pub type ExprId = usize;
 
+// Reserved IDs are outside the range of real user functions.
+pub const BUILTIN_PRINTLN_ID: FunctionId = usize::MAX;
+pub const BUILTIN_PRINT_ID: FunctionId = usize::MAX - 1;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirProgram {
     pub functions: Vec<HirFunction>,
@@ -248,7 +252,11 @@ impl HirLowerer {
         match expr {
             ast::Expr::Literal(lit) => HirExpr { ty: self.literal_type(lit), kind: HirExprKind::Literal(lit.clone()) },
             ast::Expr::Identifier(name) => {
-                if let Some(id) = self.function_ids.get(name).copied() {
+                if name == "println" {
+                    HirExpr { ty: Type::Unit, kind: HirExprKind::Function(BUILTIN_PRINTLN_ID) }
+                } else if name == "print" {
+                    HirExpr { ty: Type::Unit, kind: HirExprKind::Function(BUILTIN_PRINT_ID) }
+                } else if let Some(id) = self.function_ids.get(name).copied() {
                     HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }
                 } else {
                     HirExpr { ty: Type::Unknown, kind: HirExprKind::Local(self.local_id(name)) }
