@@ -40,7 +40,8 @@ impl MirValidator {
                     check_target(*else_block, &mut errors);
                     Self::validate_operand(function, condition, &local_ids, &mut errors);
                 }
-                Terminator::Return | Terminator::Unreachable => {}
+                Terminator::Return(value) => { if let Some(value) = value { Self::validate_rvalue(function, value, &local_ids, &mut errors); } }
+                Terminator::Unreachable => {}
             }
 
             for statement in &block.statements {
@@ -126,7 +127,7 @@ impl MirValidator {
                         queue.push_back(then_block);
                         queue.push_back(else_block);
                     }
-                    Terminator::Return | Terminator::Unreachable => {}
+                    Terminator::Return(_) | Terminator::Unreachable => {}
                 }
             }
         }
