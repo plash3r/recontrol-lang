@@ -77,7 +77,7 @@ impl SemanticAnalyzer {
     fn check_function(&mut self,f:&Function,impl_ty:Option<&str>){
         let sig=if let Some(t)=impl_ty{self.methods.get(&(t.to_string(),f.name.clone())).cloned()}else{self.functions.get(&f.name).cloned()};
         let Some(sig)=sig else{return}; let mut env=Env::default(); env.push();
-        for (i,p) in f.params.iter().enumerate(){let ty=sig.params[i].clone();let mutability=matches!(ty,Type::Reference{mutable:true,..});if !env.define(p.name.clone(),ty,mutability){self.error(format!("duplicate parameter '{}'",p.name));}}
+        for (i,p) in f.params.iter().enumerate(){let ty=sig.params[i].clone();let mutability=matches!(&ty,Type::Reference{mutable:true,..});if !env.define(p.name.clone(),ty,mutability){self.error(format!("duplicate parameter '{}'",p.name));}}
         self.check_block(&f.body,&mut env,&sig.return_type);env.pop();
     }
     fn check_block(&mut self,b:&Block,e:&mut Env,r:&Type){e.push();for s in &b.statements{self.check_stmt(s,e,r)}e.pop();}
