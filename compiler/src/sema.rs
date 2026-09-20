@@ -153,7 +153,7 @@ impl SemanticAnalyzer {
                     inner: Box::new(Type::Named(impl_type.unwrap().into())),
                 };
             }
-            if !env.define(param.name.clone(), ty) {
+            if !env.define(param.name.clone(), ty, matches!(sig.params[index], Type::Reference { mutable: true, .. })) {
                 self.error(format!("duplicate parameter '{}'", param.name));
             }
         }
@@ -172,7 +172,7 @@ impl SemanticAnalyzer {
 
     fn check_stmt(&mut self, stmt: &Stmt, env: &mut Env, return_type: &Type) {
         match stmt {
-            Stmt::Let { name, ty, initializer, .. } => {
+            Stmt::Let { name, mutable, ty, initializer } => {
                 let inferred = initializer.as_ref().map(|e| self.check_expr(e, env));
                 let declared = ty.as_ref().map(Type::from_ref);
                 let final_ty = match (declared, inferred) {
@@ -189,7 +189,7 @@ impl SemanticAnalyzer {
                     (None, Some(actual)) => actual,
                     (None, None) => Type::Unknown,
                 };
-                if !env.define(name.clone(), final_ty) {
+                if !env.define(name.clone(), final_ty, *mutable) {
                     self.error(format!("duplicate variable '{}'", name));
                 }
             }
@@ -204,7 +204,7 @@ impl SemanticAnalyzer {
                 let ty = self.check_expr(condition, env);
                 if ty != Type::Bool { self.error(format!("if condition must be bool, found {}", ty.display_name())); }
                 self.check_block(then_branch, env, return_type);
-                if let Some(block) = else_branch { self.check_block(block, env, return_type); }
+                if let Some(else_stmt) = else_branch { self.check_stmt(else_stmt, env, return_type); }
             }
             Stmt::While { condition, body } => {
                 let ty = self.check_expr(condition, env);
@@ -277,11 +277,18 @@ impl SemanticAnalyzer {
                     }
                 }
             }
-            Expr::Assignment { target, value } => {
+            Expr::Assignment { target, op, value } => {
                 let target_ty = self.check_expr(target, env);
+                if !self.is_assignable(target, env) {
+                    self.error("cannot assign to immutable expression");
+                }
                 let value_ty = self.check_expr(value, env);
-                if !self.compatible(&target_ty, &value_ty) {
-                    self.error(format!("assignment type mismatch: expected {}, found {}", target_ty.display_name(), value_ty.display_name()));
+                if *op == AssignOp::Assign {
+                    if !self.compatible(&target_ty, &value_ty) {
+                        self.error(format!("assignment type mismatch: expected {}, found {}", target_ty.display_name(), value_ty.display_name()));
+                    }
+                } else if !target_ty.is_numeric() || !value_ty.is_numeric() || !self.compatible(&target_ty, &value_ty) {
+                    self.error("compound assignment requires compatible numeric operands");
                 }
                 target_ty
             }
