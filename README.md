@@ -1,6 +1,6 @@
 # Recontrol Lang
 
-Recontrol Lang (RCL) — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
+Recontrol Lang (RCL) 0.1.1 — native systems programming language with a Rust compiler implementation and an LLVM IR backend.
 
 ## Install
 
