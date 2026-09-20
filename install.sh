@@ -42,30 +42,21 @@ api_get() {
 }
 
 if [ "$VERSION" = "latest" ]; then
-  RELEASE_JSON="$(api_get "$API/releases/latest")" ||
+  # Resolve the latest release through GitHub's redirect instead of parsing JSON.
+  # This avoids depending on sed/awk JSON parsing details on the user's system.
+  RELEASE_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")" ||
     die "Could not access the latest release. If the repository is private, set RCL_GITHUB_TOKEN (or GH_TOKEN)."
+
+  RELEASE_TAG="$(printf '%s\n' "$RELEASE_URL" | sed 's#^.*/tag/##; s/[?#].*$//')"
 else
   case "$VERSION" in
     v*) ;;
     *) VERSION="v$VERSION" ;;
   esac
-  RELEASE_JSON="$(api_get "$API/releases/tags/$VERSION")" ||
-    die "Could not access release $VERSION. If the repository is private, set RCL_GITHUB_TOKEN (or GH_TOKEN)."
+  RELEASE_TAG="$VERSION"
 fi
 
-# Keep this installer dependency-free apart from POSIX tools + curl.
-RELEASE_TAG="$(printf '%s' "$RELEASE_JSON" | awk -F'"' '
-  {
-    for (i = 1; i <= NF; i++) {
-      if ($i == "tag_name" && (i + 2) <= NF) {
-        print $(i + 2)
-        exit
-      }
-    }
-  }
-')"
-[ -n "$RELEASE_TAG" ] || die "GitHub returned an invalid release response (missing tag_name)."
-
+[ -n "$RELEASE_TAG" ] || die "Could not determine the release tag."
 URL="https://github.com/$REPO/releases/download/$RELEASE_TAG/$ASSET"
 CHECKSUM_URL="https://github.com/$REPO/releases/download/$RELEASE_TAG/SHA256SUMS"
 
