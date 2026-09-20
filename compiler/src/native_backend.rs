@@ -126,18 +126,19 @@ fn op(e:&mut E,f:&MirFunction,o:&Operand)->Result<(),String>{match o{
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
 fn print(e:&mut E,args:&[Operand],nl:bool)->Result<(),String>{
     if args.len()!=1{return Err("print/println require one argument".into())}
-    op(e, &MirFunction{name:String::new(),locals:Vec::new(),param_count:0,blocks:Vec::new()}, &args[0])?;
-    // rax = string pointer. Linux write(1, rsi, rdx) expects:
-    // rdi=fd, rsi=buffer, rdx=length.
-    e.rr(6,0);
-    let len=match &args[0]{
-        Operand::Constant(Literal::String(s))=>s.as_bytes().len(),
-        Operand::Copy(Place::Local(_))|Operand::Move(Place::Local(_))=>return Err("println of a string local is not yet supported without type information".into()),
-        _=>return Err("print/println currently require a string".into()),
-    };
-    e.imm(len as i64); e.rr(2,0);
+    let Operand::Constant(Literal::String(s))=&args[0]else{return Err("print/println currently require a string literal".into())};
+    let b=s.as_bytes().to_vec();
+    let n=e.intern(b.clone());
+    e.strref(n);
+    // rsi already contains the string pointer from LEA.
+    e.imm(b.len() as i64); e.rr(2,0);
     e.imm(1); e.rr(7,0); e.w(&[0x0f,5]);
-    if nl{let n=e.intern(vec![10]);e.strref(n);e.rr(6,0);e.imm(1);e.rr(2,0);e.imm(1);e.rr(7,0);e.w(&[0x0f,5]);}
+    if nl{
+        let n=e.intern(vec![10]);
+        e.strref(n);
+        e.imm(1); e.rr(2,0);
+        e.imm(1); e.rr(7,0); e.w(&[0x0f,5]);
+    }
     Ok(())
 }
 fn num(n:&str)->(&str,&str){let mut i=n.len();while i>0&&n.as_bytes()[i-1].is_ascii_alphabetic(){i-=1}(&n[..i],&n[i..])}
