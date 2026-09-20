@@ -31,7 +31,7 @@ jobs:
 
       - name: Install LLVM
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld
+        run: sudo apt-get update && sudo apt-get install -y llvm lld
 
       - name: Install LLVM
         if: runner.os == 'Windows'
@@ -50,7 +50,7 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/rcl_runtime.lib"
-            cp "C:/Program Files/LLVM/bin/clang.exe" "dist/rcl-toolchain/bin/clang.exe"
+            cp "C:/Program Files/LLVM/bin/llc.exe" "dist/rcl-toolchain/bin/llc.exe"
             cp "C:/Program Files/LLVM/bin/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
             cp "C:/Program Files/LLVM/bin/"*.dll dist/rcl-toolchain/bin/
             cp -r "C:/Program Files/LLVM/lib/clang" dist/rcl-toolchain/lib/
@@ -58,9 +58,9 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/librcl_runtime.a" "dist/librcl_runtime.a"
-            clang_bin="$(readlink -f "$(command -v clang)")"
-            llvm_root="$(dirname "$(dirname "$clang_bin")")"
-            cp "$clang_bin" "dist/rcl-toolchain/bin/clang"
+            llc_bin="$(readlink -f "$(command -v llc)")"
+            llvm_root="$(dirname "$(dirname "$llc_bin")")"
+            cp "$llc_bin" "dist/rcl-toolchain/bin/llc"
             cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
             cp -r "$llvm_root/lib/clang" dist/rcl-toolchain/lib/
 
@@ -88,7 +88,7 @@ jobs:
               )
             }
 
-            copy_runtime_deps "dist/rcl-toolchain/bin/clang"
+            copy_runtime_deps "dist/rcl-toolchain/bin/llc"
             copy_runtime_deps "dist/rcl-toolchain/bin/ld.lld"
             (cd dist && tar -czf "rcl-toolchain-linux-x86_64.tar.gz" rcl-toolchain)
           fi
@@ -100,7 +100,7 @@ jobs:
           path: dist/*
 
   release:
-    if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -112,8 +112,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.2
+          tag_name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
-          name: Recontrol Lang v0.1.2
+          name: Recontrol Lang ${{ github.ref_name }}
           generate_release_notes: true
           files: dist/*
