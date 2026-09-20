@@ -104,7 +104,12 @@ impl SemanticAnalyzer {
             Expr::Literal(Literal::Number(n))=>self.number_type(n),
             Expr::Identifier(n)=>e.get(n).or_else(||if self.functions.contains_key(n){Some(Type::Named(format!("fn {}",n)))}else{None}).unwrap_or_else(||{self.error(format!("unknown identifier '{}'",n));Type::Unknown}),
             Expr::Grouping(x)=>self.expr(x,e),
-            Expr::Unary{op,expr}=>{let t=self.expr(expr,e);match op{UnaryOp::Not=>if t==Type::Bool{Type::Bool}else{self.error("operator ! requires bool");Type::Unknown},UnaryOp::Plus|UnaryOp::Minus=>if t.is_numeric(){t}else{self.error("unary operator requires number");Type::Unknown}}}
+            Expr::Unary{op,expr}=>{let t=self.expr(expr,e);match op{
+                UnaryOp::Not=>if t==Type::Bool{Type::Bool}else{self.error("operator ! requires bool");Type::Unknown},
+                UnaryOp::Plus|UnaryOp::Minus=>if t.is_numeric(){t}else{self.error("unary operator requires number");Type::Unknown},
+                UnaryOp::BorrowShared=>Type::Reference{mutable:false,inner:Box::new(t)},
+                UnaryOp::BorrowMutable=>{if !self.assignable(expr,e){self.error("cannot mutably borrow immutable expression");}Type::Reference{mutable:true,inner:Box::new(t)}}
+            }}
             Expr::Binary{left,op,right}=>{let a=self.expr(left,e);let b=self.expr(right,e);match op{BinaryOp::And|BinaryOp::Or=>{if a!=Type::Bool||b!=Type::Bool{self.error("logical operators require bool operands");}Type::Bool},BinaryOp::Equal|BinaryOp::NotEqual|BinaryOp::Less|BinaryOp::LessEqual|BinaryOp::Greater|BinaryOp::GreaterEqual=>{if !self.compatible(&a,&b){self.error("incompatible comparison types");}Type::Bool},_=>if a.is_numeric()&&b.is_numeric()&&self.compatible(&a,&b){a}else{self.error("incompatible numeric operands");Type::Unknown}}}
             Expr::Assignment{target,op,value}=>{let t=self.expr(target,e);if !self.assignable(target,e){self.error("cannot assign to immutable expression");}let v=self.expr(value,e);if *op==AssignOp::Assign{if !self.compatible(&t,&v){self.error("assignment type mismatch");}}else if !t.is_numeric()||!v.is_numeric()||!self.compatible(&t,&v){self.error("compound assignment requires compatible numeric operands");}t}
             Expr::Call{callee,args}=>self.call(callee,args,e),
