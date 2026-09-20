@@ -159,7 +159,21 @@ impl MirLowerer {
                 }
             }
             HirStmt::Expr(expr) => {
-                builder.statement(MirStatement::Evaluate(Self::lower_rvalue(expr)));
+                if let HirExprKind::Assignment { target, op, value } = &expr.kind {
+                    let rvalue = Self::lower_assignment_rvalue(target, *op, value);
+                    builder.statement(MirStatement::Assign {
+                        place: Self::lower_place(target),
+                        rvalue,
+                    });
+                } else if let HirExprKind::Postfix { expr: target, op } = &expr.kind {
+                    let rvalue = Self::lower_postfix_rvalue(target, *op);
+                    builder.statement(MirStatement::Assign {
+                        place: Self::lower_place(target),
+                        rvalue,
+                    });
+                } else {
+                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(expr)));
+                }
             }
             HirStmt::Return(expr) => {
                 if let Some(expr) = expr {
@@ -277,6 +291,39 @@ impl MirLowerer {
         }
     }
 
+    fn lower_assignment_rvalue(target: &HirExpr, op: AssignOp, value: &HirExpr) -> Rvalue {
+        match op {
+            AssignOp::Assign => Self::lower_rvalue(value),
+            AssignOp::Add | AssignOp::Subtract | AssignOp::Multiply | AssignOp::Divide | AssignOp::Modulo => {
+                let binary_op = match op {
+                    AssignOp::Add => BinaryOp::Add,
+                    AssignOp::Subtract => BinaryOp::Subtract,
+                    AssignOp::Multiply => BinaryOp::Multiply,
+                    AssignOp::Divide => BinaryOp::Divide,
+                    AssignOp::Modulo => BinaryOp::Modulo,
+                    AssignOp::Assign => unreachable!(),
+                };
+                Rvalue::Binary {
+                    left: Self::lower_operand(target),
+                    op: binary_op,
+                    right: Self::lower_operand(value),
+                }
+            }
+        }
+    }
+
+    fn lower_postfix_rvalue(target: &HirExpr, op: PostfixOp) -> Rvalue {
+        let binary_op = match op {
+            PostfixOp::Increment => BinaryOp::Add,
+            PostfixOp::Decrement => BinaryOp::Subtract,
+        };
+        Rvalue::Binary {
+            left: Self::lower_operand(target),
+            op: binary_op,
+            right: Operand::Constant(Literal::Integer("1".to_string())),
+        }
+    }
+
     fn lower_rvalue(expr: &HirExpr) -> Rvalue {
         match &expr.kind {
             HirExprKind::Literal(literal) => Rvalue::Use(Operand::Constant(literal.clone())),
@@ -306,27 +353,7 @@ impl MirLowerer {
                 op: *op,
                 right: Self::lower_operand(right),
             },
-            HirExprKind::Assignment { target, op, value } => {
-                let rvalue = match op {
-                    AssignOp::Assign => Self::lower_rvalue(value),
-                    AssignOp::Add | AssignOp::Subtract | AssignOp::Multiply | AssignOp::Divide | AssignOp::Modulo => {
-                        let binary_op = match op {
-                            AssignOp::Add => BinaryOp::Add,
-                            AssignOp::Subtract => BinaryOp::Subtract,
-                            AssignOp::Multiply => BinaryOp::Multiply,
-                            AssignOp::Divide => BinaryOp::Divide,
-                            AssignOp::Modulo => BinaryOp::Modulo,
-                            AssignOp::Assign => unreachable!(),
-                        };
-                        Rvalue::Binary {
-                            left: Self::lower_operand(target),
-                            op: binary_op,
-                            right: Self::lower_operand(value),
-                        }
-                    }
-                };
-                rvalue
-            }
+            HirExprKind::Assignment { target, op, value } => Self::lower_assignment_rvalue(target, *op, value),
             HirExprKind::Call { callee, args } => Rvalue::Call {
                 callee: Self::lower_operand(callee),
                 args: args.iter().map(Self::lower_operand).collect(),
@@ -401,6 +428,14 @@ mod tests {
         assert_eq!(mir.functions.len(), 1);
         assert!(matches!(mir.functions[0].blocks[0].statements[0], MirStatement::StorageLive(_)));
         assert!(matches!(mir.functions[0].blocks[0].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn lowers_assignment_to_place_write() {
+        let mir = lower("fn main(){let mut x:i32=10 x += 5}");
+        assert!(mir.functions[0].blocks[0].statements.iter().any(|statement| {
+            matches!(statement, MirStatement::Assign { place: Place::Local(_), rvalue: Rvalue::Binary { .. } })
+        }));
     }
 
     #[test]
