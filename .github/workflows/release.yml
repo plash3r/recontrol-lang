@@ -42,8 +42,16 @@ jobs:
               println("Hello, Recontrol!")
           }
           EOF
-          output="$(./target/${{ matrix.target }}/release/rcl run smoke.rcl)"
-          test "$output" = "Hello, Recontrol!"
+          ./target/${{ matrix.target }}/release/rcl build smoke.rcl
+          file smoke
+          readelf -h -l smoke
+          set +e
+          ./smoke > smoke.out
+          status=$?
+          set -e
+          cat smoke.out
+          test $status -eq 0
+          test "$(cat smoke.out)" = "Hello, Recontrol!"
 
       - name: Smoke test compiler
         if: runner.os == 'Windows'
