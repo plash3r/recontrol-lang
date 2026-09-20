@@ -475,6 +475,7 @@ mod tests {
     #[test]
     fn double_storage_dead_is_rejected() {
         let function = MirFunction {
+            param_count: 0,
             name: "bad".into(),
             locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
             blocks: vec![crate::mir::BasicBlock {
@@ -496,6 +497,7 @@ mod tests {
     #[test]
     fn branch_join_with_live_storage_passes() {
         let function = MirFunction {
+            param_count: 0,
             name: "branch".into(),
             locals: vec![crate::mir::MirLocal { id: 0, ty: crate::types::Type::I32, mutable: false }],
             blocks: vec![
