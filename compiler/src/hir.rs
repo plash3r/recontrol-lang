@@ -1,4 +1,4 @@
-use crate::ast::{self, AssignOp, BinaryOp, Literal, PostfixOp, ReferenceKind, UnaryOp};
+use crate::ast::{self, AssignOp, BinaryOp, Literal, PostfixOp, UnaryOp};
 use crate::types::Type;
 use std::collections::HashMap;
 
