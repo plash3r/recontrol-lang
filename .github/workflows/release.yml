@@ -64,8 +64,7 @@ jobs:
             cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
             cp -r "$llvm_root/lib/clang" dist/rcl-toolchain/lib/
 
-            # Bundle the non-glibc shared libraries needed by clang/LLD.
-            # This includes dependencies such as libxml2 that are not part of LLVM itself.
+            # Bundle the non-glibc shared libraries needed by LLVM tools.
             declare -A seen=()
             copy_runtime_deps() {
               local file="$1"
