@@ -40,6 +40,8 @@ rcl --version
 
 ## CLI
 
+RCL 0.1.2 releases bundle the native clang/LLD toolchain, so the compiler does not require a separately installed native compiler.
+
 Once installed, Cargo is not part of the normal RCL workflow:
 
 ~~~bash
