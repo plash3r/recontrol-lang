@@ -15,7 +15,7 @@ struct E {
     jumps: Vec<(usize, usize, bool)>,
     calls: Vec<(usize, String)>,
     strs: Vec<(String, Vec<u8>)>,
-    refs: Vec<(usize, String)>,
+    refs: Vec<(usize, Vec<u8>)>,
 }
 impl E {
     fn p(&self)->usize{self.b.len()}
@@ -32,11 +32,12 @@ impl E {
     fn jmp(&mut self,id:usize){let p=self.p();self.w(&[0xe9,0,0,0,0]);self.jumps.push((p,id,false));}
     fn jcc(&mut self,id:usize){let p=self.p();self.w(&[0x0f,0x85,0,0,0,0]);self.jumps.push((p,id,true));}
     fn call(&mut self,n:String){let p=self.p();self.w(&[0xe8,0,0,0,0]);self.calls.push((p,n));}
-    fn strref(&mut self,n:String){let p=self.p();self.w(&[0x48,0x8d,0x35,0,0,0,0]);self.refs.push((p,n));}
+    fn strref(&mut self,n:String){let p=self.p();self.w(&[0x48,0x8d,0x35,0,0,0,0]);if let Some((_,b))=self.strs.iter().find(|(x,_)|*x==n){self.refs.push((p,b.clone()));}}
     fn intern(&mut self,x:Vec<u8>)->String{if let Some((n,_))=self.strs.iter().find(|(_,b)|*b==x){return n.clone()}let n=format!(".s{}",self.strs.len());self.strs.push((n.clone(),x));n}
-    fn patch(mut self, funcs:&HashMap<String,usize>, base:usize, ro:usize)->Result<Vec<u8>,String>{
+    fn patch(mut self, funcs:&HashMap<String,usize>, base:usize, ro:usize, all_strings:&[(String,Vec<u8>)])->Result<Vec<u8>,String>{
         for (p,id,long) in &self.jumps{let t=*self.labels.get(id).ok_or_else(||format!("missing block {id}"))?;let next=p+if *long{6}else{5};let d=t as isize-next as isize;let q=p+if *long{2}else{1};self.b[q..q+4].copy_from_slice(&(d as i32).to_le_bytes());}
         for (p,n) in &self.calls{let t=*funcs.get(n).ok_or_else(||format!("missing function {n}"))?;let d=(base+t) as isize-(base+p+5) as isize;self.b[p+1..p+5].copy_from_slice(&(d as i32).to_le_bytes());}
+        for (p,b) in &self.refs{let mut t=ro;let mut found=false;for (_,x) in all_strings{if x==b{found=true;break}t+=x.len();}if !found{return Err("missing native string".into())}let d=t as isize-(base+p+7) as isize;self.b[p+3..p+7].copy_from_slice(&(d as i32).to_le_bytes());}
         Ok(self.b)
     }
 }
@@ -67,29 +68,10 @@ fn emit_linux(p:&MirProgram)->Result<Vec<u8>,Vec<CodegenError>>{
     let mut strings=Vec::<(String,Vec<u8>)>::new();for (_,e,_) in &es{for x in &e.strs{if !strings.iter().any(|(n,_):&(String,Vec<u8>)|n==&x.0){strings.push(x.clone())}}}
     let ro=base+stub+raw.len();let mut rod=Vec::new();for (_,b) in &strings{rod.extend_from_slice(b)}
     let mut code=entry();let mut off=0usize;
-    for (_,e,end) in es{let _=end;let n=e.patch(&funcs,base,ro).unwrap();code.extend_from_slice(&n);off+=n.len();let _=off;}
+    for (_,e,end) in es{let _=end;let n=e.patch(&funcs,base,ro,&strings).unwrap();code.extend_from_slice(&n);off+=n.len();let _=off;}
     let main=*funcs.get("main").unwrap_or(&stub);let d=(base+main) as isize-(base+5) as isize;code[1..5].copy_from_slice(&(d as i32).to_le_bytes());code.extend_from_slice(&rod);
-    patch_string_leas(&mut code, base, ro, &strings)?;
     Ok(elf(code,base))
 }
-#[cfg(all(target_os="linux",target_arch="x86_64"))]
-fn patch_string_leas(code:&mut [u8], base:usize, ro:usize, strings:&[(String,Vec<u8>)])->Result<(),Vec<CodegenError>>{
-    let code_len=ro-base;
-    let mut pos=0usize;
-    let mut index=0usize;
-    while pos+7<=code_len{
-        if code[pos..pos+3]==[0x48,0x8d,0x35]{
-            let target=ro+strings.iter().take(index).map(|(_,b)|b.len()).sum::<usize>();
-            let d=target as isize-(base+pos+7) as isize;
-            code[pos+3..pos+7].copy_from_slice(&(d as i32).to_le_bytes());
-            index+=1;
-        }
-        pos+=1;
-    }
-    if index!=strings.len(){return Err(vec![CodegenError{function:"<module>".into(),message:format!("native string relocation mismatch: emitted {index}, stored {}",strings.len())}])}
-    Ok(())
-}
-
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
 fn er(f:&MirFunction,m:&str)->CodegenError{CodegenError{function:f.name.clone(),message:m.into()}}
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
