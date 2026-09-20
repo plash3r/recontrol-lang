@@ -1,4 +1,4 @@
-pub mod ast;
+pub mod ast;\npub mod borrowck;
 pub mod diagnostics;
 pub mod lexer;
 pub mod parser;
