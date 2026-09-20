@@ -1,7 +1,8 @@
 use std::env;
 use std::fs;
 
-use rcl::borrowck::BorrowChecker;\nuse rcl::lexer::Lexer;
+use rcl::borrowck::BorrowChecker;
+use rcl::lexer::Lexer;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
