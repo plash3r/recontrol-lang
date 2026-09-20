@@ -16,7 +16,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://github.com/$REPO/releases/latest/download/$TOOLCHAIN_ASSET" -o "$tmp/toolchain.tar.gz"
 tar -xzf "$tmp/toolchain.tar.gz" -C "$INSTALL_DIR"
-chmod +x "$INSTALL_DIR/rcl" "$INSTALL_DIR/rcl-toolchain/bin/clang" "$INSTALL_DIR/rcl-toolchain/bin/ld.lld"
+chmod +x "$INSTALL_DIR/rcl" "$INSTALL_DIR/rcl-toolchain/bin/llc" "$INSTALL_DIR/rcl-toolchain/bin/ld.lld"
 
 printf '%s\n' "Installed rcl to $INSTALL_DIR/rcl"
 
