@@ -20,7 +20,7 @@ struct Cx<'a> {
 
 impl LlvmBackend {
     pub fn emit(program: &MirProgram) -> Result<String, Vec<CodegenError>> {
-        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = "recontrol"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\n\n");
+        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\n\n");
         let mut strings = Vec::new();
         let mut functions = String::new();
         let mut errors = Vec::new();
@@ -45,7 +45,7 @@ impl LlvmBackend {
         }
         if !errors.is_empty() { return Err(errors); }
         for (name, bytes) in strings {
-            writeln!(module, "{name} = private unnamed_addr constant [{} x i8] c"{}", align 1", bytes.len(), escape_bytes(&bytes)).unwrap();
+            writeln!(module, "{name} = private unnamed_addr constant [{} x i8] c\"{}\", align 1", bytes.len(), escape_bytes(&bytes)).unwrap();
         }
         if !functions.is_empty() { module.push('\n'); }
         module.push_str(&functions);
@@ -282,7 +282,7 @@ fn llvm_type(t:&Type)->String { match t {
     Type::I8|Type::U8=>"i8", Type::I16|Type::U16=>"i16", Type::I32|Type::U32|Type::Char=>"i32",
     Type::I64|Type::U64|Type::Isize|Type::Usize=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
     Type::F32=>"float",Type::F64=>"double",Type::F128=>"fp128",Type::Bool=>"i1",Type::Str|Type::Reference{..}=>"ptr",
-    Type::Unit=>"void",Type::Named(n)=>return format!("%"{}"",n),Type::Array(_)|Type::Unknown=>"ptr"
+    Type::Unit=>"void",Type::Named(n)=>return format!("%\"{}\" ",n).trim_end().to_string(),Type::Array(_)|Type::Unknown=>"ptr"
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }
