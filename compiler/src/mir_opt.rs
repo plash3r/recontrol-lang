@@ -1,4 +1,4 @@
-use crate::mir::{MirProgram, MirStatement, Terminator};
+use crate::mir::{MirProgram, Terminator};
 use crate::mir_validate::build_cfg;
 use std::collections::{HashSet, VecDeque};
 
@@ -8,7 +8,6 @@ impl MirOptimizer {
     pub fn optimize(program: &mut MirProgram) {
         for function in &mut program.functions {
             Self::remove_unreachable_blocks(function);
-            Self::remove_empty_evaluations(function);
         }
     }
 
@@ -43,12 +42,6 @@ impl MirOptimizer {
             };
         }
         function.blocks = blocks;
-    }
-
-    fn remove_empty_evaluations(function: &mut crate::mir::MirFunction) {
-        function.blocks.iter_mut().for_each(|block| {
-            block.statements.retain(|statement| !matches!(statement, MirStatement::Evaluate(_)));
-        });
     }
 }
 
