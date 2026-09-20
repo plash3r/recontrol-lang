@@ -65,7 +65,17 @@ fn emit_linux(p:&MirProgram)->Result<Vec<u8>,Vec<CodegenError>>{
     if !errs.is_empty(){return Err(errs)}
     let stub=14usize;let base=120usize;let mut funcs=HashMap::new();let mut prev=0usize;
     for (n,_,end) in &es{funcs.insert(n.clone(),stub+prev);prev=*end;}
-    let mut strings=Vec::<(String,Vec<u8>)>::new();for (_,e,_) in &es{for x in &e.strs{if !strings.iter().any(|(n,_):&(String,Vec<u8>)|n==&x.0){strings.push(x.clone())}}}
+    let mut strings=Vec::<(String,Vec<u8>)>::new();
+    for (_,e,_) in &es {
+        for (_,b) in &e.refs {
+            if !strings.iter().any(|(_,x)| x==b) {
+                strings.push((format!(".g{}",strings.len()),b.clone()));
+            }
+        }
+        for x in &e.strs {
+            if !strings.iter().any(|(_,b)|b==&x.1) { strings.push(x.clone()); }
+        }
+    }
     let ro=base+stub+raw.len();let mut rod=Vec::new();for (_,b) in &strings{rod.extend_from_slice(b)}
     let mut code=entry();let mut off=0usize;
     for (_,e,end) in es{let _=end;let n=e.patch(&funcs,base,ro,&strings).unwrap();code.extend_from_slice(&n);off+=n.len();let _=off;}
