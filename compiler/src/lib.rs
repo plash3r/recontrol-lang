@@ -11,3 +11,4 @@ pub mod mir_borrow;
 pub mod parser;
 pub mod sema;
 pub mod types;
+pub mod mir_opt;
