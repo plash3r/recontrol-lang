@@ -24,6 +24,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install LLVM toolchain
-        run: sudo apt-get update && sudo apt-get install -y clang
+        run: sudo apt-get update && sudo apt-get install -y llvm lld
       - name: Build and run native executable
         run: cargo run -p rcl -- run examples/hello.rcl
