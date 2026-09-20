@@ -95,6 +95,7 @@ pub struct HirLowerer {
     functions: Vec<HirFunction>,
     structs: Vec<HirStruct>,
     scopes: Vec<HashMap<String, LocalId>>,
+    function_ids: HashMap<String, FunctionId>,
 }
 
 impl HirLowerer {
@@ -105,7 +106,27 @@ impl HirLowerer {
             functions: Vec::new(),
             structs: Vec::new(),
             scopes: Vec::new(),
+            function_ids: HashMap::new(),
         };
+
+        for item in &program.items {
+            match item {
+                ast::Item::Function(f) => {
+                    let id = lowerer.next_function;
+                    lowerer.function_ids.insert(f.name.clone(), id);
+                    lowerer.next_function += 1;
+                }
+                ast::Item::Impl(i) => {
+                    for f in &i.methods {
+                        let id = lowerer.next_function;
+                        lowerer.function_ids.insert(f.name.clone(), id);
+                        lowerer.next_function += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        lowerer.next_function = 0;
 
         for item in &program.items {
             match item {
@@ -226,9 +247,12 @@ impl HirLowerer {
     fn lower_expr(&mut self, expr: &ast::Expr) -> HirExpr {
         match expr {
             ast::Expr::Literal(lit) => HirExpr { ty: self.literal_type(lit), kind: HirExprKind::Literal(lit.clone()) },
-            ast::Expr::Identifier(name) => HirExpr {
-                ty: Type::Unknown,
-                kind: HirExprKind::Local(self.local_id(name)),
+            ast::Expr::Identifier(name) => {
+                if let Some(id) = self.function_ids.get(name).copied() {
+                    HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }
+                } else {
+                    HirExpr { ty: Type::Unknown, kind: HirExprKind::Local(self.local_id(name)) }
+                }
             },
             ast::Expr::Unary { op, expr } => {
                 let inner = self.lower_expr(expr);
