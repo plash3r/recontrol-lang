@@ -37,12 +37,6 @@ impl E {
     fn patch(mut self, funcs:&HashMap<String,usize>, base:usize, ro:usize)->Result<Vec<u8>,String>{
         for (p,id,long) in &self.jumps{let t=*self.labels.get(id).ok_or_else(||format!("missing block {id}"))?;let next=p+if *long{6}else{5};let d=t as isize-next as isize;let q=p+if *long{2}else{1};self.b[q..q+4].copy_from_slice(&(d as i32).to_le_bytes());}
         for (p,n) in &self.calls{let t=*funcs.get(n).ok_or_else(||format!("missing function {n}"))?;let d=(base+t) as isize-(base+p+5) as isize;self.b[p+1..p+5].copy_from_slice(&(d as i32).to_le_bytes());}
-        for (p,n) in &self.refs {
-            let idx = n.strip_prefix(".s").and_then(|x| x.parse::<usize>().ok()).ok_or_else(|| format!("bad string {n}"))?;
-            let t = ro + self.strs.iter().take(idx).map(|(_,b)| b.len()).sum::<usize>();
-            let d = t as isize - (base + p + 7) as isize;
-            self.b[p+3..p+7].copy_from_slice(&(d as i32).to_le_bytes());
-        }
         Ok(self.b)
     }
 }
@@ -77,6 +71,24 @@ fn emit_linux(p:&MirProgram)->Result<Vec<u8>,Vec<CodegenError>>{
     let main=*funcs.get("main").unwrap_or(&stub);let d=(base+main) as isize-(base+5) as isize;code[1..5].copy_from_slice(&(d as i32).to_le_bytes());code.extend_from_slice(&rod);
     Ok(elf(code,base))
 }
+#[cfg(all(target_os="linux",target_arch="x86_64"))]
+fn patch_string_leas(code:&mut [u8], base:usize, ro:usize, strings:&[(String,Vec<u8>)])->Result<(),Vec<CodegenError>>{
+    let code_len=ro-base;
+    let mut pos=0usize;
+    let mut index=0usize;
+    while pos+7<=code_len{
+        if code[pos..pos+3]==[0x48,0x8d,0x35]{
+            let target=ro+strings.iter().take(index).map(|(_,b)|b.len()).sum::<usize>();
+            let d=target as isize-(base+pos+7) as isize;
+            code[pos+3..pos+7].copy_from_slice(&(d as i32).to_le_bytes());
+            index+=1;
+        }
+        pos+=1;
+    }
+    if index!=strings.len(){return Err(vec![CodegenError{function:"<module>".into(),message:format!("native string relocation mismatch: emitted {index}, stored {}",strings.len())}])}
+    Ok(())
+}
+
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
 fn er(f:&MirFunction,m:&str)->CodegenError{CodegenError{function:f.name.clone(),message:m.into()}}
 #[cfg(all(target_os="linux",target_arch="x86_64"))]
