@@ -25,88 +25,70 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install LLVM
+      - name: Install clang
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y llvm lld
+        run: sudo apt-get update && sudo apt-get install -y clang
 
-      - name: Install LLVM
+      - name: Install LLVM/Clang
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install llvm -y
-          $llc = Get-ChildItem -Path 'C:\Program Files\LLVM','C:\ProgramData\chocolatey\lib' -Filter llc.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $llc) {
-            $llc = Get-ChildItem -Path 'C:\' -Filter llc.exe -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
+            throw "clang.exe is not available on PATH"
           }
-          if (-not $llc) {
-            throw "LLVM llc.exe was not found on the Windows runner"
-          }
-          $llvmBin = $llc.DirectoryName
-          Write-Host "Found LLVM at $llvmBin"
-          if (-not (Test-Path "$llvmBin\lld-link.exe")) {
-            throw "LLVM lld-link.exe was not found in $llvmBin"
-          }
-          "LLVM_BIN=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          clang --version
+          rustc --version
 
-      - name: Build RCL and bundled runtime
+      - name: Build compiler
+        run: cargo build --release --package rcl --target ${{ matrix.target }}
+
+      - name: Smoke test compiler
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          cargo build --release --package rcl --package rcl-runtime --target ${{ matrix.target }}
+          cat > smoke.rcl <<'EOF'
+          fn main() {
+              println("Hello, Recontrol!")
+          }
+          EOF
+          output="$(./target/${{ matrix.target }}/release/rcl run smoke.rcl)"
+          test "$output" = "Hello, Recontrol!"
 
-      - name: Package compiler, runtime and bundled native toolchain
+      - name: Smoke test compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @'
+          fn main() {
+              println("Hello, Recontrol!")
+          }
+          '@ | Set-Content smoke.rcl
+          $output = & ".\target\${{ matrix.target }}\release\rcl.exe" run smoke.rcl
+          if ($output -ne "Hello, Recontrol!") {
+            throw "Unexpected compiler output: $output"
+          }
+
+      - name: Package compiler
         shell: bash
         run: |
           set -eux
-          mkdir -p dist/rcl-toolchain/bin dist/rcl-toolchain/lib
+          mkdir -p dist
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.asset }}"
-            cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/rcl_runtime.lib"
-            cp "$LLVM_BIN/llc.exe" "dist/rcl-toolchain/bin/llc.exe"
-            cp "$LLVM_BIN/lld-link.exe" "dist/rcl-toolchain/bin/lld-link.exe"
-            cp "$LLVM_BIN/"*.dll dist/rcl-toolchain/bin/
-            (cd dist && 7z a -tzip "rcl-toolchain-windows-x86_64.zip" rcl-toolchain >/dev/null)
           else
             cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
-            cp "target/${{ matrix.target }}/release/librcl_runtime.a" "dist/librcl_runtime.a"
-            llc_bin="$(readlink -f "$(command -v llc)")"
-            cp "$llc_bin" "dist/rcl-toolchain/bin/llc"
-            cp "$(readlink -f "$(command -v ld.lld)")" "dist/rcl-toolchain/bin/ld.lld"
-
-            declare -A seen=()
-            copy_runtime_deps() {
-              local file="$1"
-              local dep
-              while IFS= read -r dep; do
-                [[ -z "$dep" || ! -f "$dep" ]] && continue
-                case "$(basename "$dep")" in
-                  linux-vdso.so.*|ld-linux*.so.*|libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libresolv.so.*|libutil.so.*|libcrypt.so.*)
-                    continue
-                    ;;
-                esac
-                if [[ -z "${seen[$dep]+x}" ]]; then
-                  seen["$dep"]=1
-                  cp -a "$dep" dist/rcl-toolchain/lib/
-                  copy_runtime_deps "$dep"
-                fi
-              done < <(
-                ldd "$file" 2>/dev/null |
-                  sed -n 's/.*=> ([^ ]*) (.*/\1/p; s/^\([^ ]*\.so[^ ]*\) (.*/\1/p'
-              )
-            }
-
-            copy_runtime_deps "dist/rcl-toolchain/bin/llc"
-            copy_runtime_deps "dist/rcl-toolchain/bin/ld.lld"
-            (cd dist && tar -czf "rcl-toolchain-linux-x86_64.tar.gz" rcl-toolchain)
           fi
-          rm -rf dist/rcl-toolchain
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/*
+          path: dist/${{ matrix.asset }}
 
   release:
     if: github.ref == 'refs/heads/main'
@@ -121,8 +103,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.3
+          tag_name: v0.1.4
           target_commitish: ${{ github.sha }}
-          name: Recontrol Lang v0.1.3
+          name: Recontrol Lang v0.1.4
           generate_release_notes: true
           files: dist/*
