@@ -102,6 +102,7 @@ fn build_native(source: &str) -> Result<PathBuf, String> {
     let runtime = runtime_library()?;
     let out = executable_path(source);
     let clang = native_compiler()?;
+    let toolchain = toolchain_dir()?;
     let toolchain_bin = clang.parent().ok_or_else(|| "rcl: invalid bundled toolchain".to_string())?;
 
     let mut path = toolchain_bin.as_os_str().to_os_string();
@@ -110,12 +111,26 @@ fn build_native(source: &str) -> Result<PathBuf, String> {
         path.push(system_path);
     }
 
-    let status = Command::new(&clang)
+    let mut command = Command::new(&clang);
+    command
         .env("PATH", path)
         .arg("-fuse-ld=lld")
         .arg("-x").arg("ir").arg(&ll)
         .arg("-x").arg("none").arg(&runtime)
-        .arg("-o").arg(&out)
+        .arg("-o").arg(&out);
+
+    #[cfg(target_os = "linux")]
+    {
+        let toolchain_lib = toolchain.join("lib");
+        let mut ld_library_path = toolchain_lib.as_os_str().to_os_string();
+        if let Some(system_path) = env::var_os("LD_LIBRARY_PATH") {
+            ld_library_path.push(":");
+            ld_library_path.push(system_path);
+        }
+        command.env("LD_LIBRARY_PATH", ld_library_path);
+    }
+
+    let status = command
         .status()
         .map_err(|e| format!("rcl: cannot execute bundled native toolchain: {e}"))?;
 
