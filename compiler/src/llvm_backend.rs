@@ -86,7 +86,12 @@ impl<'a> Cx<'a> {
                 let p = self.place(place)?;
                 Ok(format!("  store {} {}, ptr {}\n", llvm_type(&ty), v, p))
             }
-            MirStatement::Evaluate(rvalue) => { let _ = self.rvalue(rvalue)?; Ok(String::new()) }
+            MirStatement::Evaluate(rvalue) => {
+                let value = self.rvalue(rvalue)?;
+                if value.starts_with("  ") { Ok(value) }
+                else if value.contains(" = ") { Ok(format!("  {value}\\n")) }
+                else { Ok(String::new()) }
+            }
         }
     }
 
