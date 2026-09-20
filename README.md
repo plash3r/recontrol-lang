@@ -66,7 +66,7 @@ rcl --help                  Show help
 
 rcl build produces a native executable next to the source file. LLVM IR can be requested explicitly with rcl emit-llvm.
 
-The current compiler uses clang to turn LLVM IR into a native executable. The compiler contains the small Rust runtime required by the current print and println builtins. No C runtime source is used.
+The current compiler uses clang to turn LLVM IR into a native executable. The release installer also installs a prebuilt Rust runtime beside the compiler. End users do not need Rust or Cargo to build RCL programs. The current native linker requirement is clang/LLVM. No C runtime source is used.
 
 ## Development installation
 
