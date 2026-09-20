@@ -124,7 +124,7 @@ impl Parser {
 
     fn parse_let(&mut self, _in_for: bool) -> Result<Stmt, ParseError> {
         self.expect(TokenKind::Let, "expected let")?;
-        let mutable = false;
+        let mutable = self.match_kind(TokenKind::Mut);
         let name = self.expect_identifier("expected variable name")?;
         let ty = if self.match_kind(TokenKind::Colon) { Some(self.parse_type()?) } else { None };
         let initializer = if self.match_kind(TokenKind::Equal) { Some(self.parse_expression()?) } else { None };
