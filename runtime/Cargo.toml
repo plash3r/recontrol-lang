@@ -1,0 +1,10 @@
+[package]
+name = "rcl-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rcl_runtime"
+crate-type = ["staticlib"]
+
+[dependencies]
