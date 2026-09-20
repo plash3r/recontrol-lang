@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn emits_hello_world_llvm() {
-        let source = "fn main(){let message:str="Hello" println(message)}";
+        let source = r#"fn main(){let message:str="Hello" println(message)}"#;
         let tokens = Lexer::new(source).tokenize().unwrap();
         let program = Parser::new(tokens).parse().unwrap();
         SemanticAnalyzer::check(&program).unwrap();
