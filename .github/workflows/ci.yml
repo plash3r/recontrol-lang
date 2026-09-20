@@ -25,9 +25,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y clang
-      - name: Build LLVM IR
-        run: cargo run -p rcl -- build examples/hello.rcl
-      - name: Compile native executable
-        run: clang -x ir examples/hello.ll runtime/rcl_runtime.c -o /tmp/rcl-hello
-      - name: Run native executable
-        run: /tmp/rcl-hello
+      - name: Build and run native executable
+        run: cargo run -p rcl -- run examples/hello.rcl
