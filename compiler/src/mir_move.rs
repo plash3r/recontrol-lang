@@ -211,7 +211,7 @@ impl MirMoveAnalyzer {
                     };
                 }
             }
-            Operand::Constant(_) => {}
+            Operand::Constant(_) | Operand::Function(_) => {}
         }
     }
 
