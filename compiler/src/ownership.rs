@@ -222,6 +222,11 @@ impl OwnershipChecker {
                 }
                 let value_ty = self.expr(value, env, true);
                 self.expr(target, env, false);
+                if let Some(name) = self.root_identifier(target) {
+                    if let Some(state) = env.get_mut(&name) {
+                        state.moved = false;
+                    }
+                }
                 value_ty
             }
             Expr::Call { callee, args } => self.call(callee, args, env),
