@@ -292,8 +292,12 @@ impl HirLowerer {
             }
             ast::Expr::Call { callee, args } => {
                 let callee = self.lower_expr(callee);
-                let args = args.iter().map(|a| self.lower_expr(a)).collect();
-                HirExpr { ty: Type::Unknown, kind: HirExprKind::Call { callee: Box::new(callee), args } }
+                let args: Vec<_> = args.iter().map(|a| self.lower_expr(a)).collect();
+                let ty = match &callee.kind {
+                    HirExprKind::Function(id) => self.function_returns.get(id).cloned().unwrap_or(Type::Unit),
+                    _ => Type::Unknown,
+                };
+                HirExpr { ty, kind: HirExprKind::Call { callee: Box::new(callee), args } }
             }
             ast::Expr::Member { object, name } => {
                 let object = self.lower_expr(object);
