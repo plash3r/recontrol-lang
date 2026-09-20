@@ -93,7 +93,7 @@ impl MirValidator {
     fn validate_operand(function: &MirFunction, operand: &Operand, locals: &HashSet<usize>, errors: &mut Vec<MirError>) {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => Self::validate_place(function, place, locals, errors),
-            Operand::Constant(_) => {}
+            Operand::Constant(_) | Operand::Function(_) => {}
         }
     }
 
