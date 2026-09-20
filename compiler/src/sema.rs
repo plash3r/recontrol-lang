@@ -438,8 +438,10 @@ impl SemanticAnalyzer {
         expected == actual
             || matches!(expected, Type::Unknown)
             || matches!(actual, Type::Unknown)
-            || matches!((expected, actual),
-                (Type::Reference { inner, .. }, actual) if inner.as_ref() == actual)
+            || match expected {
+                Type::Reference { inner, .. } => inner.as_ref() == actual,
+                _ => false,
+            }
     }
 }
 
