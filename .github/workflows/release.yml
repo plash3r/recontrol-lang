@@ -66,9 +66,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate checksums
-        run: sha256sum dist/* > dist/SHA256SUMS
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
