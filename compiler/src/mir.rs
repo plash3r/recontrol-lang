@@ -568,7 +568,7 @@ impl MirLowerer {
             },
             HirExprKind::Index { object, index } => Place::Index {
                 base: Box::new(Self::lower_place(builder, locals, object)),
-                index: Self::lower_operand(builder, locals, index),
+                index: Box::new(Self::lower_operand(builder, locals, index)),
             },
             _ => {
                 let temp = Self::new_temp(locals, expr.ty.clone());
