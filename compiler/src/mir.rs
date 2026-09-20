@@ -573,9 +573,10 @@ impl MirLowerer {
             _ => {
                 let temp = Self::new_temp(locals, expr.ty.clone());
                 builder.statement(MirStatement::StorageLive(temp));
+                let rvalue = Self::lower_rvalue(builder, locals, expr);
                 builder.statement(MirStatement::Assign {
                     place: Place::Local(temp),
-                    rvalue: Self::lower_rvalue(builder, locals, expr),
+                    rvalue,
                 });
                 Place::Local(temp)
             }
