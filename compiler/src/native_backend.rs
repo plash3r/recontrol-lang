@@ -37,7 +37,12 @@ impl E {
     fn patch(mut self, funcs:&HashMap<String,usize>, base:usize, ro:usize)->Result<Vec<u8>,String>{
         for (p,id,long) in &self.jumps{let t=*self.labels.get(id).ok_or_else(||format!("missing block {id}"))?;let next=p+if *long{6}else{5};let d=t as isize-next as isize;let q=p+if *long{2}else{1};self.b[q..q+4].copy_from_slice(&(d as i32).to_le_bytes());}
         for (p,n) in &self.calls{let t=*funcs.get(n).ok_or_else(||format!("missing function {n}"))?;let d=(base+t) as isize-(base+p+5) as isize;self.b[p+1..p+5].copy_from_slice(&(d as i32).to_le_bytes());}
-        for (p,n) in &self.refs{let mut q=ro;let mut found=None;for (x,b) in &self.strs{if x==n{found=Some(q);break}q+=b.len()}let t=found.ok_or_else(||format!("missing string {n}"))?;let d=t as isize-(base+p+7) as isize;self.b[p+3..p+7].copy_from_slice(&(d as i32).to_le_bytes());}
+        for (p,n) in &self.refs {
+            let idx = n.strip_prefix(".s").and_then(|x| x.parse::<usize>().ok()).ok_or_else(|| format!("bad string {n}"))?;
+            let t = ro + self.strs.iter().take(idx).map(|(_,b)| b.len()).sum::<usize>();
+            let d = t as isize - (base + p + 7) as isize;
+            self.b[p+3..p+7].copy_from_slice(&(d as i32).to_le_bytes());
+        }
         Ok(self.b)
     }
 }
