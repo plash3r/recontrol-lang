@@ -111,6 +111,9 @@ impl MirMoveAnalyzer {
             } else if states.iter().all(|s| *s == LocalState::Moved) {
                 LocalState::Moved
             } else if states.iter().any(|s| *s == LocalState::Uninitialized) {
+                // A value is definitely initialized only when every incoming
+                // edge has it initialized. Mixing initialized and moved
+                // states is conservatively treated as moved.
                 LocalState::Uninitialized
             } else {
                 LocalState::Moved
@@ -134,7 +137,11 @@ impl MirMoveAnalyzer {
                 }
             }
             MirStatement::StorageDead(local) => {
-                state.locals.insert(*local, LocalState::Moved);
+                // StorageDead ends the lifetime of the MIR local; it is not a
+                // move. Treating it as Moved makes a temporary that is dead on
+                // one CFG edge poison the corresponding value on a loop
+                // back-edge and produces false "use of moved value" errors.
+                state.locals.insert(*local, LocalState::Uninitialized);
             }
             MirStatement::Assign { place, rvalue } => {
                 Self::check_rvalue(function, block, rvalue, state, errors);
@@ -274,6 +281,34 @@ mod tests {
     #[test]
     fn initialized_local_is_usable() {
         let mir = lower("fn main(){let x:i32=10 println(x)}");
+        assert!(MirMoveAnalyzer::analyze(&mir).is_ok());
+    }
+
+    #[test]
+    fn copy_integer_survives_for_loop_backedge() {
+        let mir = lower(r#"
+            fn main() {
+                let mut i: i32 = 0
+                for (let mut j: i32 = 0; j < 5; j++) {
+                    i++
+                    println(i)
+                }
+            }
+        "#);
+        assert!(MirMoveAnalyzer::analyze(&mir).is_ok());
+    }
+
+    #[test]
+    fn copy_integer_survives_while_loop_backedge() {
+        let mir = lower(r#"
+            fn main() {
+                let mut i: i32 = 0
+                while i < 5 {
+                    println(i)
+                    i++
+                }
+            }
+        "#);
         assert!(MirMoveAnalyzer::analyze(&mir).is_ok());
     }
 }
