@@ -148,8 +148,10 @@ impl MirMoveAnalyzer {
         state: &mut FlowState,
         errors: &mut Vec<MoveError>,
     ) {
-        if let Terminator::SwitchBool { condition, .. } = terminator {
-            Self::check_operand(function, block, condition, state, errors);
+        match terminator {
+            Terminator::SwitchBool { condition, .. } => Self::check_operand(function, block, condition, state, errors),
+            Terminator::Return(Some(value)) => Self::check_rvalue(function, block, value, state, errors),
+            Terminator::Return(None) | Terminator::Goto(_) | Terminator::Unreachable => {}
         }
     }
 
