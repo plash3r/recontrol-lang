@@ -122,14 +122,26 @@ impl MirLowerer {
     }
 
     fn lower_function(function: &HirFunction) -> MirFunction {
-        let locals = function.body.locals.iter().map(|local| MirLocal {
-            id: local.id,
-            ty: local.ty.clone(),
-            mutable: local.mutable,
-        }).collect();
+        let mut locals = Vec::new();
+        for param in &function.params {
+            locals.push(MirLocal {
+                id: param.local,
+                ty: param.ty.clone(),
+                mutable: matches!(param.ty, Type::Reference { mutable: true, .. }),
+            });
+        }
+        for local in &function.body.locals {
+            if !locals.iter().any(|existing: &MirLocal| existing.id == local.id) {
+                locals.push(MirLocal {
+                    id: local.id,
+                    ty: local.ty.clone(),
+                    mutable: local.mutable,
+                });
+            }
+        }
 
         let mut builder = Builder::new();
-        Self::lower_block(&mut builder, &function.body);
+        Self::lower_block(&mut builder, &function.body, &mut locals);
         if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
             builder.finish_block(Terminator::Return(None));
         }
@@ -141,52 +153,136 @@ impl MirLowerer {
         }
     }
 
-    fn lower_block(builder: &mut Builder, block: &crate::hir::HirBlock) {
+    fn lower_block(builder: &mut Builder, block: &crate::hir::HirBlock, locals: &mut Vec<MirLocal>) {
         for stmt in &block.statements {
-            Self::lower_stmt(builder, stmt);
+            Self::lower_stmt(builder, stmt, locals);
         }
     }
 
-    fn lower_stmt(builder: &mut Builder, stmt: &HirStmt) {
+    fn new_temp(locals: &mut Vec<MirLocal>, ty: Type) -> LocalId {
+        let id = locals.iter().map(|local| local.id).max().map(|id| id + 1).unwrap_or(0);
+        locals.push(MirLocal { id, ty, mutable: true });
+        id
+    }
+
+    fn lower_operand(builder: &mut Builder, locals: &mut Vec<MirLocal>, expr: &HirExpr) -> Operand {
+        match &expr.kind {
+            HirExprKind::Literal(literal) => Operand::Constant(literal.clone()),
+            HirExprKind::Local(local) => {
+                if expr.ty.is_copy() {
+                    Operand::Copy(Place::Local(*local))
+                } else {
+                    Operand::Move(Place::Local(*local))
+                }
+            }
+            HirExprKind::Function(id) => Operand::Function(*id),
+            _ => {
+                let temp = Self::new_temp(locals, expr.ty.clone());
+                builder.statement(MirStatement::StorageLive(temp));
+                builder.statement(MirStatement::Assign {
+                    place: Place::Local(temp),
+                    rvalue: Self::lower_rvalue(builder, locals, expr),
+                });
+                Operand::Move(Place::Local(temp))
+            }
+        }
+    }
+
+    fn lower_rvalue(builder: &mut Builder, locals: &mut Vec<MirLocal>, expr: &HirExpr) -> Rvalue {
+        match &expr.kind {
+            HirExprKind::Literal(literal) => Rvalue::Use(Operand::Constant(literal.clone())),
+            HirExprKind::Local(local) => {
+                if expr.ty.is_copy() {
+                    Rvalue::Use(Operand::Copy(Place::Local(*local)))
+                } else {
+                    Rvalue::Use(Operand::Move(Place::Local(*local)))
+                }
+            }
+            HirExprKind::Unary { op, expr } => {
+                if matches!(op, UnaryOp::BorrowShared | UnaryOp::BorrowMutable) {
+                    if let HirExprKind::Local(local) = expr.kind {
+                        return Rvalue::Ref {
+                            mutable: *op == UnaryOp::BorrowMutable,
+                            place: Place::Local(local),
+                        };
+                    }
+                }
+                Rvalue::Unary {
+                    op: *op,
+                    operand: Self::lower_operand(builder, locals, expr),
+                }
+            }
+            HirExprKind::Binary { left, op, right } => Rvalue::Binary {
+                left: Self::lower_operand(builder, locals, left),
+                op: *op,
+                right: Self::lower_operand(builder, locals, right),
+            },
+            HirExprKind::Assignment { target, op, value } => Self::lower_assignment_rvalue(builder, locals, target, *op, value),
+            HirExprKind::Call { callee, args } => Rvalue::Call {
+                callee: Self::lower_operand(builder, locals, callee),
+                args: args.iter().map(|arg| Self::lower_operand(builder, locals, arg)).collect(),
+            },
+            HirExprKind::Member { object, name } => {
+                let place = Self::lower_place(builder, locals, object);
+                Rvalue::Use(Operand::Copy(Place::Field {
+                    base: Box::new(place),
+                    name: name.clone(),
+                }))
+            }
+            HirExprKind::Postfix { expr, .. } => Rvalue::Use(Self::lower_operand(builder, locals, expr)),
+            HirExprKind::StructLiteral { name, fields } => Rvalue::Aggregate {
+                name: name.clone(),
+                fields: fields.iter().map(|(n, e)| (n.clone(), Self::lower_operand(builder, locals, e))).collect(),
+            },
+            HirExprKind::Array(values) => Rvalue::Array(values.iter().map(|e| Self::lower_operand(builder, locals, e)).collect()),
+            HirExprKind::Index { object, index } => Rvalue::Use(Operand::Copy(Place::Index {
+                base: Box::new(Self::lower_place(builder, locals, object)),
+                index: Self::lower_operand(builder, locals, index),
+            })),
+            HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
+        }
+    }
+
+    fn lower_stmt(builder: &mut Builder, stmt: &HirStmt, locals: &mut Vec<MirLocal>) {
         match stmt {
             HirStmt::Let { local, initializer } => {
                 builder.statement(MirStatement::StorageLive(*local));
                 if let Some(value) = initializer {
                     builder.statement(MirStatement::Assign {
                         place: Place::Local(*local),
-                        rvalue: Self::lower_rvalue(value),
+                        rvalue: Self::lower_rvalue(builder, locals, value),
                     });
                 }
             }
             HirStmt::Expr(expr) => {
                 if let HirExprKind::Assignment { target, op, value } = &expr.kind {
-                    let rvalue = Self::lower_assignment_rvalue(target, *op, value);
+                    let rvalue = Self::lower_assignment_rvalue(builder, locals, target, *op, value);
                     builder.statement(MirStatement::Assign {
-                        place: Self::lower_place(target),
+                        place: Self::lower_place(builder, locals, target),
                         rvalue,
                     });
                 } else if let HirExprKind::Postfix { expr: target, op } = &expr.kind {
-                    let rvalue = Self::lower_postfix_rvalue(target, *op);
+                    let rvalue = Self::lower_postfix_rvalue(builder, locals, target, *op);
                     builder.statement(MirStatement::Assign {
                         place: Self::lower_place(target),
                         rvalue,
                     });
                 } else {
-                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(expr)));
+                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(builder, locals, expr)));
                 }
             }
             HirStmt::Return(expr) => {
-                let value = expr.as_ref().map(Self::lower_rvalue);
+                let value = expr.as_ref().map(|expr| Self::lower_rvalue(builder, locals, expr));
                 builder.finish_block(Terminator::Return(value));
                 let next = builder.new_block();
                 builder.switch_to(next);
             }
-            HirStmt::Block(block) => Self::lower_block(builder, block),
+            HirStmt::Block(block) => Self::lower_block(builder, block, locals),
             HirStmt::If { condition, then_branch, else_branch } => {
                 let then_block = builder.new_block();
                 let else_block = builder.new_block();
                 let join_block = builder.new_block();
-                let condition = Self::lower_operand(condition);
+                let condition = Self::lower_operand(builder, locals, condition);
                 builder.finish_block(Terminator::SwitchBool {
                     condition,
                     then_block,
@@ -194,14 +290,14 @@ impl MirLowerer {
                 });
 
                 builder.switch_to(then_block);
-                Self::lower_block(builder, then_branch);
+                Self::lower_block(builder, then_branch, locals);
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(join_block));
                 }
 
                 builder.switch_to(else_block);
                 if let Some(stmt) = else_branch {
-                    Self::lower_stmt(builder, stmt);
+                    Self::lower_stmt(builder, stmt, locals);
                 }
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(join_block));
@@ -224,7 +320,7 @@ impl MirLowerer {
                 });
 
                 builder.switch_to(body_block);
-                Self::lower_block(builder, body);
+                Self::lower_block(builder, body, locals);
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(head));
                 }
@@ -253,7 +349,7 @@ impl MirLowerer {
             }
             HirStmt::For { initializer, condition, update, body } => {
                 if let Some(init) = initializer {
-                    Self::lower_stmt(builder, init);
+                    Self::lower_stmt(builder, init, locals);
                 }
                 let head = builder.new_block();
                 let body_block = builder.new_block();
@@ -281,7 +377,7 @@ impl MirLowerer {
 
                 builder.switch_to(update_block);
                 if let Some(update) = update {
-                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(update)));
+                    builder.statement(MirStatement::Evaluate(Self::lower_rvalue(builder, locals, update)));
                 }
                 builder.finish_block(Terminator::Goto(head));
                 builder.switch_to(exit);
@@ -289,9 +385,15 @@ impl MirLowerer {
         }
     }
 
-    fn lower_assignment_rvalue(target: &HirExpr, op: AssignOp, value: &HirExpr) -> Rvalue {
+    fn lower_assignment_rvalue(
+        builder: &mut Builder,
+        locals: &mut Vec<MirLocal>,
+        target: &HirExpr,
+        op: AssignOp,
+        value: &HirExpr,
+    ) -> Rvalue {
         match op {
-            AssignOp::Assign => Self::lower_rvalue(value),
+            AssignOp::Assign => Self::lower_rvalue(builder, locals, value),
             AssignOp::Add | AssignOp::Subtract | AssignOp::Multiply | AssignOp::Divide | AssignOp::Modulo => {
                 let binary_op = match op {
                     AssignOp::Add => BinaryOp::Add,
@@ -302,108 +404,51 @@ impl MirLowerer {
                     AssignOp::Assign => unreachable!(),
                 };
                 Rvalue::Binary {
-                    left: Self::lower_operand(target),
+                    left: Self::lower_operand(builder, locals, target),
                     op: binary_op,
-                    right: Self::lower_operand(value),
+                    right: Self::lower_operand(builder, locals, value),
                 }
             }
         }
     }
 
-    fn lower_postfix_rvalue(target: &HirExpr, op: PostfixOp) -> Rvalue {
+    fn lower_postfix_rvalue(
+        builder: &mut Builder,
+        locals: &mut Vec<MirLocal>,
+        target: &HirExpr,
+        op: PostfixOp,
+    ) -> Rvalue {
         let binary_op = match op {
             PostfixOp::Increment => BinaryOp::Add,
             PostfixOp::Decrement => BinaryOp::Subtract,
         };
         Rvalue::Binary {
-            left: Self::lower_operand(target),
+            left: Self::lower_operand(builder, locals, target),
             op: binary_op,
             right: Operand::Constant(Literal::Number("1".to_string())),
         }
     }
 
-    fn lower_rvalue(expr: &HirExpr) -> Rvalue {
-        match &expr.kind {
-            HirExprKind::Literal(literal) => Rvalue::Use(Operand::Constant(literal.clone())),
-            HirExprKind::Local(local) => {
-                if expr.ty.is_copy() {
-                    Rvalue::Use(Operand::Copy(Place::Local(*local)))
-                } else {
-                    Rvalue::Use(Operand::Move(Place::Local(*local)))
-                }
-            }
-            HirExprKind::Unary { op, expr } => {
-                if matches!(op, UnaryOp::BorrowShared | UnaryOp::BorrowMutable) {
-                    if let HirExprKind::Local(local) = expr.kind {
-                        return Rvalue::Ref {
-                            mutable: *op == UnaryOp::BorrowMutable,
-                            place: Place::Local(local),
-                        };
-                    }
-                }
-                Rvalue::Unary {
-                    op: *op,
-                    operand: Self::lower_operand(expr),
-                }
-            }
-            HirExprKind::Binary { left, op, right } => Rvalue::Binary {
-                left: Self::lower_operand(left),
-                op: *op,
-                right: Self::lower_operand(right),
-            },
-            HirExprKind::Assignment { target, op, value } => Self::lower_assignment_rvalue(target, *op, value),
-            HirExprKind::Call { callee, args } => Rvalue::Call {
-                callee: Self::lower_operand(callee),
-                args: args.iter().map(Self::lower_operand).collect(),
-            },
-            HirExprKind::Member { object, name } => {
-                let place = Place::Field {
-                    base: Box::new(Self::lower_place(object)),
-                    name: name.clone(),
-                };
-                Rvalue::Use(Operand::Copy(place))
-            }
-            HirExprKind::Postfix { expr, .. } => Rvalue::Use(Self::lower_operand(expr)),
-            HirExprKind::StructLiteral { name, fields } => Rvalue::Aggregate {
-                name: name.clone(),
-                fields: fields.iter().map(|(n, e)| (n.clone(), Self::lower_operand(e))).collect(),
-            },
-            HirExprKind::Array(values) => Rvalue::Array(values.iter().map(Self::lower_operand).collect()),
-            HirExprKind::Index { object, index } => Rvalue::Use(Operand::Copy(Place::Index {
-                base: Box::new(Self::lower_place(object)),
-                index: Self::lower_operand(index),
-            })),
-            HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
-        }
-    }
-
-    fn lower_operand(expr: &HirExpr) -> Operand {
-        match &expr.kind {
-            HirExprKind::Literal(literal) => Operand::Constant(literal.clone()),
-            HirExprKind::Local(local) => {
-                if expr.ty.is_copy() {
-                    Operand::Copy(Place::Local(*local))
-                } else {
-                    Operand::Move(Place::Local(*local))
-                }
-            }
-            HirExprKind::Function(id) => Operand::Function(*id),
-            _ => Operand::Move(Place::Local(usize::MAX)),
-        }
-    }
-
-    fn lower_place(expr: &HirExpr) -> Place {
+    fn lower_place(builder: &mut Builder, locals: &mut Vec<MirLocal>, expr: &HirExpr) -> Place {
         match &expr.kind {
             HirExprKind::Local(local) => Place::Local(*local),
             HirExprKind::Member { object, name } => Place::Field {
-                base: Box::new(Self::lower_place(object)),
+                base: Box::new(Self::lower_place(builder, locals, object)),
                 name: name.clone(),
             },
             HirExprKind::Index { object, index } => Place::Index {
-                base: Box::new(Self::lower_place(object)),
-                index: Self::lower_operand(index),
+                base: Box::new(Self::lower_place(builder, locals, object)),
+                index: Self::lower_operand(builder, locals, index),
             },
-            _ => Place::Local(usize::MAX),
+            _ => {
+                let temp = Self::new_temp(locals, expr.ty.clone());
+                builder.statement(MirStatement::StorageLive(temp));
+                builder.statement(MirStatement::Assign {
+                    place: Place::Local(temp),
+                    rvalue: Self::lower_rvalue(builder, locals, expr),
+                });
+                Place::Local(temp)
+            }
         }
     }
 }
@@ -433,6 +478,16 @@ mod tests {
         let mir = lower("fn main(){let mut x:i32=10 x += 5}");
         assert!(mir.functions[0].blocks[0].statements.iter().any(|statement| {
             matches!(statement, MirStatement::Assign { place: Place::Local(_), rvalue: Rvalue::Binary { .. } })
+        }));
+    }
+
+    #[test]
+    fn lowers_expression_to_temporary() {
+        let mir = lower("fn main(){let x:i32=1 let y:i32=2 println(x + y)}");
+        let locals = &mir.functions[0].locals;
+        assert!(locals.len() > 2);
+        assert!(mir.functions[0].blocks[0].statements.iter().any(|statement| {
+            matches!(statement, MirStatement::Assign { place: Place::Local(id), .. } if *id != usize::MAX)
         }));
     }
 
