@@ -7,29 +7,29 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/plash3r/recontrol-lang.git"
+    "url": "https://github.com/plash3r/recontrol-lang.git",
+    "directory": "vscode-extension"
   },
-  "engines": {
-    "vscode": "^1.90.0"
+  "homepage": "https://github.com/plash3r/recontrol-lang/tree/main/vscode-extension",
+  "bugs": {
+    "url": "https://github.com/plash3r/recontrol-lang/issues"
   },
-  "categories": [
-    "Programming Languages"
-  ],
+  "keywords": ["recontrol", "rcl", "language", "syntax", "programming language"],
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages"],
+  "preview": true,
+  "galleryBanner": { "color": "#111111", "theme": "dark" },
   "contributes": {
-    "languages": [
-      {
-        "id": "recontrol",
-        "aliases": ["Recontrol Lang", "recontrol", "rcl"],
-        "extensions": [".rcl"],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "recontrol",
-        "scopeName": "source.rcl",
-        "path": "./syntaxes/recontrol.tmLanguage.json"
-      }
-    ]
+    "languages": [{
+      "id": "recontrol",
+      "aliases": ["Recontrol Lang", "recontrol", "rcl"],
+      "extensions": [".rcl"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "recontrol",
+      "scopeName": "source.rcl",
+      "path": "./syntaxes/recontrol.tmLanguage.json"
+    }]
   }
 }
