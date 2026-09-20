@@ -263,10 +263,8 @@ impl MirLowerer {
                     builder.statement(MirStatement::Assign { place, rvalue });
                 } else if let HirExprKind::Postfix { expr: target, op } = &expr.kind {
                     let rvalue = Self::lower_postfix_rvalue(builder, locals, target, *op);
-                    builder.statement(MirStatement::Assign {
-                        place: Self::lower_place(builder, locals, target),
-                        rvalue,
-                    });
+                    let place = Self::lower_place(builder, locals, target);
+                    builder.statement(MirStatement::Assign { place, rvalue });
                 } else {
                     let rvalue = Self::lower_rvalue(builder, locals, expr);
                     builder.statement(MirStatement::Evaluate(rvalue));
@@ -340,7 +338,7 @@ impl MirLowerer {
                 }
 
                 builder.switch_to(condition_block);
-                let condition = Self::lower_operand(condition);
+                let condition = Self::lower_operand(builder, locals, condition);
                 builder.finish_block(Terminator::SwitchBool {
                     condition,
                     then_block: body_block,
@@ -360,7 +358,7 @@ impl MirLowerer {
                 builder.finish_block(Terminator::Goto(head));
                 builder.switch_to(head);
                 if let Some(condition) = condition {
-                    let condition = Self::lower_operand(condition);
+                    let condition = Self::lower_operand(builder, locals, condition);
                     builder.finish_block(Terminator::SwitchBool {
                         condition,
                         then_block: body_block,
@@ -371,7 +369,7 @@ impl MirLowerer {
                 }
 
                 builder.switch_to(body_block);
-                Self::lower_block(builder, body);
+                Self::lower_block(builder, body, locals);
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(update_block));
                 }
