@@ -25,8 +25,8 @@ impl E {
     fn rr(&mut self,d:u8,s:u8){self.w(&[0x48,0x89,0xc0|(s<<3)|d]);}
     fn ld(&mut self,o:i32){self.w(&[0x48,0x8b,0x85]);self.b.extend_from_slice(&o.to_le_bytes());}
     fn st(&mut self,o:i32){self.w(&[0x48,0x89,0x85]);self.b.extend_from_slice(&o.to_le_bytes());}
-    fn push(&mut self,r:u8){self.w(&[0x50+r]);}
-    fn pop(&mut self,r:u8){self.w(&[0x58+r]);}
+    fn push_reg(&mut self,r:u8){self.w(&[0x50+r]);}
+    fn pop_reg(&mut self,r:u8){self.w(&[0x58+r]);}
     fn pro(&mut self,n:u32){self.w(&[0x55,0x48,0x89,0xe5]);if n>0{self.w(&[0x48,0x81,0xec]);self.b.extend_from_slice(&n.to_le_bytes());}}
     fn epi(&mut self){self.w(&[0xc9,0xc3]);}
     fn jmp(&mut self,id:usize){let p=self.p();self.w(&[0xe9,0,0,0,0]);self.jumps.push((p,id,false));}
@@ -93,7 +93,7 @@ fn rv(e:&mut E,p:&MirProgram,f:&MirFunction,v:&Rvalue)->Result<(),String>{
     match v{
         Rvalue::Use(o)=>op(e,f,o),
         Rvalue::Unary{op:u,operand}=>{op(e,f,operand)?;match u{UnaryOp::Plus=>{},UnaryOp::Minus=>e.w(&[0x48,0xf7,0xd8]),UnaryOp::Not=>e.w(&[0x48,0x83,0xf0,1]),_=>return Err("references unsupported".into())}Ok(())},
-        Rvalue::Binary{left,op:u,right}=>{op(e,f,left)?;e.push(&[0]);op(e,f,right)?;e.rr(3,0);e.pop(0);match u{
+        Rvalue::Binary{left,op:u,right}=>{op(e,f,left)?;e.push(&[0]);op(e,f,right)?;e.rr(3,0);e.pop_reg(0);match u{
             BinaryOp::Add=>e.w(&[0x48,1,0xd8]),BinaryOp::Subtract=>e.w(&[0x48,0x29,0xd8]),BinaryOp::Multiply=>e.w(&[0x48,0x0f,0xaf,0xc3]),
             BinaryOp::Divide=>{e.rr(3,0);e.w(&[0x48,0x99,0x48,0xf7,0xfb])},BinaryOp::Modulo=>{e.rr(3,0);e.w(&[0x48,0x99,0x48,0xf7,0xfb]);e.rr(0,2)},
             BinaryOp::And=>e.w(&[0x48,0x21,0xd8]),BinaryOp::Or=>e.w(&[0x48,9,0xd8]),
