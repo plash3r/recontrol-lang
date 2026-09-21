@@ -259,6 +259,14 @@ impl Parser {
             TokenKind::For => self.parse_for(),
             TokenKind::Match => self.parse_match(),
             TokenKind::Return => self.parse_return(),
+            TokenKind::Break => {
+                let token = self.advance().clone();
+                Ok(Stmt::new(StmtKind::Break, token.span))
+            }
+            TokenKind::Continue => {
+                let token = self.advance().clone();
+                Ok(Stmt::new(StmtKind::Continue, token.span))
+            }
             TokenKind::LeftBrace => {
                 let block = self.parse_block()?;
                 let span = block.span;
@@ -415,7 +423,8 @@ impl Parser {
             || matches!(
                 self.peek().kind,
                 TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do |
-                TokenKind::For | TokenKind::Match | TokenKind::Return | TokenKind::LeftBrace
+                TokenKind::For | TokenKind::Match | TokenKind::Return | TokenKind::Break |
+                TokenKind::Continue | TokenKind::LeftBrace
             )
         {
             None
@@ -692,7 +701,8 @@ impl Parser {
         if matches!(
             self.peek().kind,
             TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do | TokenKind::For |
-            TokenKind::Match | TokenKind::Return | TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
+            TokenKind::Match | TokenKind::Return | TokenKind::Break | TokenKind::Continue |
+            TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
             TokenKind::String | TokenKind::True | TokenKind::False | TokenKind::Bang | TokenKind::Minus |
             TokenKind::Plus | TokenKind::Ampersand | TokenKind::LeftBracket | TokenKind::LeftParen
         ) {
@@ -795,6 +805,16 @@ mod tests {
             Item::Function(function) => assert_eq!(function.body.statements.len(), 3),
             _ => panic!("expected function"),
         }
+    }
+
+    #[test]
+    fn parses_break_and_continue() {
+        let program = parse("fn main(){while true { break } for(;true;){ continue }}");
+        let Item::Function(function) = &program.items[0] else { panic!("expected function") };
+        let StmtKind::While { body, .. } = &function.body.statements[0].kind else { panic!("expected while") };
+        assert!(matches!(body.statements[0].kind, StmtKind::Break));
+        let StmtKind::For { body, .. } = &function.body.statements[1].kind else { panic!("expected for") };
+        assert!(matches!(body.statements[0].kind, StmtKind::Continue));
     }
 
     #[test]
