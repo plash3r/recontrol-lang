@@ -94,7 +94,7 @@ impl BorrowChecker {
                         checker.check_function(method, Some(&implementation.type_name));
                     }
                 }
-                Item::Struct(_) | Item::Import(_) => {}
+                Item::Struct(_) | Item::Enum(_) | Item::Import(_) => {}
             }
         }
 
@@ -166,7 +166,7 @@ impl BorrowChecker {
                         );
                     }
                 }
-                Item::Struct(_) => {}
+                Item::Struct(_) | Item::Enum(_) => {}
             }
         }
     }
@@ -270,6 +270,12 @@ impl BorrowChecker {
                 if let Some(update) = update { self.check_expression(update, env); }
                 self.check_block_body(body, env);
                 self.leave_scope(env);
+            }
+            StmtKind::Match { value, arms } => {
+                self.check_expression(value, env);
+                for arm in arms {
+                    self.check_block_body(&arm.body, env);
+                }
             }
             StmtKind::Block(block) => self.check_block_body(block, env),
         }
