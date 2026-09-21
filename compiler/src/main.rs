@@ -330,6 +330,87 @@ fn run_project_tests() -> Result<(), String> {
     Ok(())
 }
 
+fn format_rcl_source(source: &str) -> String {
+    let mut output = String::new();
+    let mut indent = 0usize;
+
+    for raw_line in source.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            output.push('\n');
+            continue;
+        }
+
+        let leading_closes = trimmed.chars().take_while(|ch| *ch == '}').count();
+        let display_indent = indent.saturating_sub(leading_closes);
+        output.push_str(&" ".repeat(display_indent * 4));
+        output.push_str(trimmed);
+        output.push('\n');
+
+        let mut opens = 0usize;
+        let mut closes = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let chars = trimmed.as_bytes();
+        let mut index = 0usize;
+        while index < chars.len() {
+            let byte = chars[index];
+
+            if !in_string && byte == b'/' && chars.get(index + 1) == Some(&b'/') {
+                break;
+            }
+
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                index += 1;
+                continue;
+            }
+
+            match byte {
+                b'"' => in_string = true,
+                b'{' => opens += 1,
+                b'}' => closes += 1,
+                _ => {}
+            }
+            index += 1;
+        }
+
+        indent = indent.saturating_add(opens).saturating_sub(closes);
+    }
+
+    if !source.ends_with('\n') && output.ends_with('\n') {
+        output.pop();
+    }
+    output
+}
+
+fn format_source_file(path: &str, check: bool) -> Result<(), String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("rcl: cannot read {path}: {e}"))?;
+    let formatted = format_rcl_source(&source);
+
+    if check {
+        if formatted != source {
+            return Err(format!("rcl: source is not formatted: {path}"));
+        }
+        println!("Formatted: {path}");
+        return Ok(());
+    }
+
+    if formatted != source {
+        fs::write(path, formatted)
+            .map_err(|e| format!("rcl: cannot write {path}: {e}"))?;
+    }
+    println!("Formatted: {path}");
+    Ok(())
+}
+
 fn new_project(name: &str) -> Result<(), String> {
     let root = Path::new(name);
     if root.exists() { return Err(format!("rcl: directory already exists: {}", root.display())); }
@@ -354,6 +435,7 @@ fn print_help() {
     println!("  rcl build [file.rcl]       Build a file or the current project");
     println!("  rcl run [file.rcl]         Build and run a file or the current project");
     println!("  rcl test                   Build and run tests/*.rcl in the current project");
+    println!("  rcl fmt [file.rcl]         Format a file or the current project entry");
     println!("  rcl emit-llvm [file.rcl]   Emit LLVM IR for a file or project");
     println!("  rcl new <name>             Create a new project");
     println!("  rcl --version              Show compiler version");
@@ -412,6 +494,25 @@ fn main() {
             },
             Err(e) => { eprintln!("{e}"); std::process::exit(2); }
         },
+        Some("fmt") => {
+            let rest = args.collect::<Vec<_>>();
+            let check = rest.iter().any(|argument| argument == "--check");
+            let source_arg = rest.iter()
+                .find(|argument| argument.as_str() != "--check")
+                .cloned();
+            match resolve_source(source_arg) {
+                Ok(path) => {
+                    if let Err(e) = format_source_file(&path, check) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            }
+        }
         Some("test") => {
             if let Err(e) = run_project_tests() {
                 eprintln!("{e}");
@@ -424,5 +525,24 @@ fn main() {
             print_help();
             std::process::exit(2);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn formatter_indents_blocks_without_touching_braces_in_strings_or_comments() {
+        let source = "fn main() {\nprintln(\"{ not a block }\")\nif true { // { comment\nprintln(\"ok\")\n}\n}\n";
+        let expected = "fn main() {\n    println(\"{ not a block }\")\n    if true { // { comment\n        println(\"ok\")\n    }\n}\n";
+        assert_eq!(format_rcl_source(source), expected);
+    }
+
+    #[test]
+    fn formatter_is_idempotent() {
+        let source = "fn main() {\n    println(\"ok\")\n}\n";
+        assert_eq!(format_rcl_source(&format_rcl_source(source)), source);
     }
 }
