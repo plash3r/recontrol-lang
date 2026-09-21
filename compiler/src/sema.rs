@@ -902,15 +902,42 @@ mod tests {
         let tokens = Lexer::with_source_id(source, 1).tokenize().unwrap();
         let imported = Parser::new(tokens).parse().unwrap();
 
-        let caller_source = "fn main(){visible() hidden()}";
+        let caller_source = "use \"module.rcl\"\nfn main(){visible() hidden()}";
         let tokens = Lexer::with_source_id(caller_source, 0).tokenize().unwrap();
-        let caller = Parser::new(tokens).parse().unwrap();
+        let mut caller = Parser::new(tokens).parse().unwrap();
+        if let Item::Import(import) = &mut caller.items[0] {
+            import.target_source_id = Some(1);
+        }
 
-        let mut items = imported.items;
-        items.extend(caller.items);
+        let mut items = caller.items;
+        items.extend(imported.items);
         let errors = SemanticAnalyzer::check(&Program { items }).unwrap_err();
         assert!(errors.iter().any(|error| error.message.contains("hidden") && error.message.contains("private")));
         assert!(!errors.iter().any(|error| error.message.contains("visible") && error.message.contains("private")));
+    }
+
+    #[test]
+    fn namespace_alias_resolves_same_named_functions() {
+        let left = Parser::new(Lexer::with_source_id("pub fn value():i32{return 1}", 1).tokenize().unwrap())
+            .parse().unwrap();
+        let right = Parser::new(Lexer::with_source_id("pub fn value():i32{return 2}", 2).tokenize().unwrap())
+            .parse().unwrap();
+        let mut caller = Parser::new(
+            Lexer::with_source_id(
+                "use \"left.rcl\" as left\nuse \"right.rcl\" as right\nfn main(){left.value() right.value()}",
+                0,
+            ).tokenize().unwrap(),
+        ).parse().unwrap();
+        if let Item::Import(import) = &mut caller.items[0] {
+            import.target_source_id = Some(1);
+        }
+        if let Item::Import(import) = &mut caller.items[1] {
+            import.target_source_id = Some(2);
+        }
+        let mut items = caller.items;
+        items.extend(left.items);
+        items.extend(right.items);
+        assert!(SemanticAnalyzer::check(&Program { items }).is_ok());
     }
 
     #[test]
