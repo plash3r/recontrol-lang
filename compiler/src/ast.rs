@@ -25,6 +25,8 @@ impl Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub path: String,
+    pub alias: Option<String>,
+    pub target_source_id: Option<usize>,
     pub span: Span,
 }
 
