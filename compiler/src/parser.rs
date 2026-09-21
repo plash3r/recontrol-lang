@@ -277,7 +277,15 @@ impl Parser {
 
     fn parse_return(&mut self) -> Result<Stmt, ParseError> {
         let start = self.expect(TokenKind::Return, "expected return")?.span;
-        let value = if self.check(TokenKind::Newline) || self.check(TokenKind::Semicolon) || self.check(TokenKind::RightBrace) {
+        let value = if self.check(TokenKind::Newline)
+            || self.check(TokenKind::Semicolon)
+            || self.check(TokenKind::RightBrace)
+            || matches!(
+                self.peek().kind,
+                TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do |
+                TokenKind::For | TokenKind::Return | TokenKind::LeftBrace
+            )
+        {
             None
         } else {
             Some(self.parse_expression()?)
@@ -466,7 +474,7 @@ impl Parser {
             TokenKind::True => Ok(Expr::new(ExprKind::Literal(Literal::Bool(true)), token.span)),
             TokenKind::False => Ok(Expr::new(ExprKind::Literal(Literal::Bool(false)), token.span)),
             TokenKind::Identifier => {
-                if self.check(TokenKind::LeftBrace) {
+                if self.looks_like_struct_literal() {
                     self.parse_struct_literal(token.lexeme, token.span)
                 } else {
                     Ok(Expr::new(ExprKind::Identifier(token.lexeme), token.span))
@@ -481,6 +489,29 @@ impl Parser {
                 Ok(Expr::new(ExprKind::Grouping(Box::new(expr)), token.span.join(end)))
             }
             _ => Err(ParseError { message: "expected expression".into(), span: token.span }),
+        }
+    }
+
+    fn looks_like_struct_literal(&self) -> bool {
+        if !self.check(TokenKind::LeftBrace) {
+            return false;
+        }
+
+        let mut index = self.current + 1;
+        while self.tokens.get(index).map(|token| token.kind == TokenKind::Newline).unwrap_or(false) {
+            index += 1;
+        }
+
+        match self.tokens.get(index).map(|token| &token.kind) {
+            Some(TokenKind::RightBrace) => true,
+            Some(TokenKind::Identifier) => {
+                let mut next = index + 1;
+                while self.tokens.get(next).map(|token| token.kind == TokenKind::Newline).unwrap_or(false) {
+                    next += 1;
+                }
+                self.tokens.get(next).map(|token| token.kind == TokenKind::Colon).unwrap_or(false)
+            }
+            _ => false,
         }
     }
 
