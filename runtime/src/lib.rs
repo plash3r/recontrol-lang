@@ -3,13 +3,9 @@ use std::io::{self, Write};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rcl_print(s: *const u8) {
-    if s.is_null() {
-        return;
-    }
-
+    if s.is_null() { return; }
     let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
     let text = String::from_utf8_lossy(bytes);
-
     print!("{text}");
     let _ = io::stdout().flush();
 }
@@ -20,9 +16,40 @@ pub extern "C" fn rcl_println(s: *const u8) {
         println!();
         return;
     }
-
     let bytes = unsafe { CStr::from_ptr(s.cast()).to_bytes() };
     let text = String::from_utf8_lossy(bytes);
-
     println!("{text}");
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_print_i8(value: i8) {
+    print!("{value}");
+    let _ = io::stdout().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_println_i8(value: i8) {
+    println!("{value}");
+    let _ = io::stdout().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_print_i32(value: i32) {
+    print!("{value}");
+    let _ = io::stdout().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_println_i32(value: i32) {
+    println!("{value}");
+    let _ = io::stdout().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_check_bounds_i32(index: i32, length: i32) {
+    if index < 0 || index >= length {
+        eprintln!("rcl: array index {index} is out of bounds for length {length}");
+        let _ = io::stderr().flush();
+        std::process::exit(1);
+    }
 }
