@@ -1,0 +1,5 @@
+fn main() {
+    let zero: i32 = 0
+    let value: i32 = 10 / zero
+    println(value)
+}
