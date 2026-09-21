@@ -195,6 +195,7 @@ impl OwnershipChecker {
                 self.expr(condition, env, false);
                 self.check_block(body, env);
             }
+            StmtKind::Loop { body } => self.check_block(body, env),
             StmtKind::DoWhile { body, condition } => {
                 self.check_block(body, env);
                 self.expr(condition, env, false);
