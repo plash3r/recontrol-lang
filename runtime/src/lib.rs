@@ -53,3 +53,22 @@ pub extern "C" fn rcl_check_bounds_i32(index: i32, length: i32) {
         std::process::exit(1);
     }
 }
+
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_check_divisor(is_zero: i32) {
+    if is_zero != 0 {
+        eprintln!("rcl: integer division or remainder by zero");
+        let _ = io::stderr().flush();
+        std::process::exit(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_check_div_overflow(is_overflow: i32) {
+    if is_overflow != 0 {
+        eprintln!("rcl: signed integer division overflow (minimum value divided by -1)");
+        let _ = io::stderr().flush();
+        std::process::exit(1);
+    }
+}
