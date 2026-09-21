@@ -103,13 +103,31 @@ impl SemanticAnalyzer {
     fn collect(&mut self, program: &Program) {
         for item in &program.items {
             match item {
+                Item::Import(import) => {
+                    let Some(target_source_id) = import.target_source_id else { continue };
+                    if let Some(alias) = &import.alias {
+                        let duplicate = self.imports
+                            .get(&import.span.source_id)
+                            .map(|imports| imports.iter().any(|existing| existing.alias.as_ref() == Some(alias)))
+                            .unwrap_or(false);
+                        if duplicate {
+                            self.error_at(import.span, format!("duplicate namespace '{}'", alias));
+                            continue;
+                        }
+                    }
+                    self.imports.entry(import.span.source_id).or_default().push(ImportInfo {
+                        target_source_id,
+                        alias: import.alias.clone(),
+                    });
+                }
                 Item::Function(function) => {
-                    if self.functions.contains_key(&function.name) {
+                    let key = (function.span.source_id, function.name.clone());
+                    if self.functions.contains_key(&key) {
                         self.error_at(function.span, format!("duplicate function '{}'", function.name));
                         continue;
                     }
                     self.functions.insert(
-                        function.name.clone(),
+                        key,
                         FunctionSig {
                             params: function.params.iter().map(|p| Type::from_ref(&p.ty)).collect(),
                             return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
@@ -119,7 +137,8 @@ impl SemanticAnalyzer {
                     );
                 }
                 Item::Struct(structure) => {
-                    if self.structs.contains_key(&structure.name) {
+                    let key = (structure.span.source_id, structure.name.clone());
+                    if self.structs.contains_key(&key) {
                         self.error_at(structure.span, format!("duplicate struct '{}'", structure.name));
                         continue;
                     }
@@ -137,7 +156,7 @@ impl SemanticAnalyzer {
                         }
                     }
                     self.structs.insert(
-                        structure.name.clone(),
+                        key,
                         StructInfo {
                             fields,
                             public: structure.public,
@@ -145,39 +164,49 @@ impl SemanticAnalyzer {
                         },
                     );
                 }
-                Item::Impl(implementation) => {
-                    if !self.structs.contains_key(&implementation.type_name) {
-                        self.error_at(
-                            implementation.span,
-                            format!("unknown type '{}' in impl", implementation.type_name),
-                        );
-                    }
-                    for function in &implementation.methods {
-                        let params = function.params.iter().map(|parameter| {
-                            if parameter.name == "self" {
-                                Type::Reference {
-                                    mutable: parameter.ty.reference == ReferenceKind::Mutable,
-                                    inner: Box::new(Type::Named(implementation.type_name.clone())),
-                                }
-                            } else {
-                                Type::from_ref(&parameter.ty)
-                            }
-                        }).collect();
-                        let key = (implementation.type_name.clone(), function.name.clone());
-                        if self.methods.insert(
-                            key.clone(),
-                            FunctionSig {
-                                params,
-                                return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
-                                public: function.public,
-                                source_id: function.span.source_id,
-                            },
-                        ).is_some() {
-                            self.error_at(function.span, format!("duplicate method '{}.{}'", key.0, key.1));
+                Item::Impl(_) => {}
+            }
+        }
+
+        for item in &program.items {
+            let Item::Impl(implementation) = item else { continue };
+            let source_id = implementation.span.source_id;
+            if !self.structs.contains_key(&(source_id, implementation.type_name.clone())) {
+                self.error_at(
+                    implementation.span,
+                    format!("unknown local type '{}' in impl", implementation.type_name),
+                );
+            }
+            for function in &implementation.methods {
+                let params = function.params.iter().map(|parameter| {
+                    if parameter.name == "self" {
+                        Type::Reference {
+                            mutable: parameter.ty.reference == ReferenceKind::Mutable,
+                            inner: Box::new(Type::Named(implementation.type_name.clone())),
                         }
+                    } else {
+                        Type::from_ref(&parameter.ty)
                     }
+                }).collect();
+                let key = (
+                    source_id,
+                    implementation.type_name.clone(),
+                    function.name.clone(),
+                );
+                if self.methods.insert(
+                    key.clone(),
+                    FunctionSig {
+                        params,
+                        return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                        public: function.public,
+                        source_id: function.span.source_id,
+                    },
+                ).is_some() {
+                    self.error_at(
+                        function.span,
+                        format!("duplicate method '{}.{}'", key.1, key.2),
+                    );
                 }
-                Item::Import(_) => {}
             }
         }
     }
@@ -197,10 +226,11 @@ impl SemanticAnalyzer {
     }
 
     fn check_function(&mut self, function: &Function, impl_ty: Option<&str>) {
+        let source_id = function.span.source_id;
         let signature = if let Some(ty) = impl_ty {
-            self.methods.get(&(ty.to_string(), function.name.clone())).cloned()
+            self.methods.get(&(source_id, ty.to_string(), function.name.clone())).cloned()
         } else {
-            self.functions.get(&function.name).cloned()
+            self.functions.get(&(source_id, function.name.clone())).cloned()
         };
         let Some(signature) = signature else { return };
 
