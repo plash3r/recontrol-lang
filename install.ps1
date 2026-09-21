@@ -5,8 +5,10 @@ $repo = if ($env:RCL_REPO) { $env:RCL_REPO } else { "plash3r/recontrol-lang" }
 $version = if ($env:RCL_VERSION) { $env:RCL_VERSION } else { "latest" }
 $installDir = if ($env:RCL_INSTALL_DIR) { $env:RCL_INSTALL_DIR } else { Join-Path $HOME ".rcl\bin" }
 $token = if ($env:RCL_GITHUB_TOKEN) { $env:RCL_GITHUB_TOKEN } elseif ($env:GH_TOKEN) { $env:GH_TOKEN } else { $null }
-$asset = "rcl-windows-x86_64.exe"
-$target = Join-Path $installDir "rcl.exe"
+$binaryAsset = "rcl-windows-x86_64.exe"
+$runtimeAsset = "rcl-runtime-windows-x86_64.lib"
+$binaryTarget = Join-Path $installDir "rcl.exe"
+$runtimeTarget = Join-Path $installDir "rcl-runtime.lib"
 
 $headers = @{ "Accept" = "application/vnd.github+json" }
 if ($token) { $headers["Authorization"] = "Bearer $token" }
@@ -27,36 +29,45 @@ try {
 $releaseTag = $release.tag_name
 if (-not $releaseTag) { throw "GitHub returned an invalid release response." }
 
-$url = "https://github.com/$repo/releases/download/$releaseTag/$asset"
-$checksumUrl = "https://github.com/$repo/releases/download/$releaseTag/SHA256SUMS"
-
+$baseUrl = "https://github.com/$repo/releases/download/$releaseTag"
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("rcl-" + [Guid]::NewGuid())
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-$tempFile = Join-Path $tempDir $asset
+$binaryTemp = Join-Path $tempDir $binaryAsset
+$runtimeTemp = Join-Path $tempDir $runtimeAsset
 $checksumFile = Join-Path $tempDir "SHA256SUMS"
 
+function Test-AssetChecksum {
+    param(
+        [string]$Asset,
+        [string]$Path,
+        [string[]]$Lines
+    )
+    $line = $Lines | Where-Object { $_ -match "\s+$([regex]::Escape($Asset))$" } | Select-Object -First 1
+    if (-not $line) { throw "Checksum for $Asset is missing from SHA256SUMS." }
+
+    $expected = ($line -split "\s+")[0].ToLowerInvariant()
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+    if ($expected -ne $actual) { throw "SHA-256 verification failed for $Asset." }
+}
+
 try {
-    Write-Host "Installing Recontrol Lang $releaseTag ($asset)..."
-    Invoke-WebRequest -Uri $url -Headers $headers -OutFile $tempFile
+    Write-Host "Installing Recontrol Lang $releaseTag..."
+    Invoke-WebRequest -Uri "$baseUrl/$binaryAsset" -Headers $headers -OutFile $binaryTemp
+    Invoke-WebRequest -Uri "$baseUrl/$runtimeAsset" -Headers $headers -OutFile $runtimeTemp
 
-    $checksumOk = $false
     try {
-        Invoke-WebRequest -Uri $checksumUrl -Headers $headers -OutFile $checksumFile
-        $line = Get-Content $checksumFile | Where-Object { $_ -match "\s+$([regex]::Escape($asset))$" } | Select-Object -First 1
-        if (-not $line) { throw "Checksum for $asset is missing from SHA256SUMS." }
-
-        $expected = ($line -split "\s+")[0].ToLowerInvariant()
-        $actual = (Get-FileHash -Algorithm SHA256 -Path $tempFile).Hash.ToLowerInvariant()
-        if ($expected -ne $actual) { throw "SHA-256 verification failed." }
-
-        $checksumOk = $true
-        Write-Host "Checksum verified."
+        Invoke-WebRequest -Uri "$baseUrl/SHA256SUMS" -Headers $headers -OutFile $checksumFile
+        $lines = Get-Content $checksumFile
+        Test-AssetChecksum -Asset $binaryAsset -Path $binaryTemp -Lines $lines
+        Test-AssetChecksum -Asset $runtimeAsset -Path $runtimeTemp -Lines $lines
+        Write-Host "Checksums verified."
     } catch {
-        Write-Warning "SHA256SUMS is not available; skipping checksum verification."
+        Write-Warning "SHA256SUMS is not available or could not be verified; checksum verification skipped."
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-    Move-Item -Force $tempFile $target
+    Move-Item -Force $binaryTemp $binaryTarget
+    Move-Item -Force $runtimeTemp $runtimeTarget
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $pathEntries = if ($userPath) { $userPath -split ";" } else { @() }
@@ -65,8 +76,9 @@ try {
         [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
     }
 
-    Write-Host "Installed: $target"
-    & $target --version
+    Write-Host "Installed: $binaryTarget"
+    Write-Host "Runtime:   $runtimeTarget"
+    & $binaryTarget --version
     Write-Host ""
     Write-Host "Restart your terminal if 'rcl' is not yet on PATH."
 }

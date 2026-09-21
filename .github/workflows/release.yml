@@ -18,10 +18,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            asset: rcl-linux-x86_64
+            binary_asset: rcl-linux-x86_64
+            runtime_asset: rcl-runtime-linux-x86_64.a
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            asset: rcl-windows-x86_64.exe
+            binary_asset: rcl-windows-x86_64.exe
+            runtime_asset: rcl-runtime-windows-x86_64.lib
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,23 +40,25 @@ jobs:
         shell: pwsh
         run: choco install llvm -y
 
-      - name: Build RCL
-        run: cargo build --release --package rcl --target ${{ matrix.target }}
+      - name: Build compiler and runtime
+        run: cargo build --release --workspace --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package release assets
         shell: bash
         run: |
           mkdir -p dist
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/rcl.exe" "dist/${{ matrix.binary_asset }}"
+            cp "target/${{ matrix.target }}/release/rcl_runtime.lib" "dist/${{ matrix.runtime_asset }}"
           else
-            cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/rcl" "dist/${{ matrix.binary_asset }}"
+            cp "target/${{ matrix.target }}/release/librcl_runtime.a" "dist/${{ matrix.runtime_asset }}"
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: ${{ matrix.binary_asset }}
+          path: dist/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
@@ -66,13 +70,16 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum rcl-* > SHA256SUMS
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.1' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.2' }}
           target_commitish: ${{ github.sha }}
-          name: Recontrol Lang ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.1' }}
+          name: Recontrol Lang ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.2' }}
           generate_release_notes: true
           files: dist/*
-
-# Rebuild release without changing RCL sources.

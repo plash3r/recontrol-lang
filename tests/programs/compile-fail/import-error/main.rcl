@@ -1,0 +1,5 @@
+use "broken.rcl"
+
+fn main() {
+    helper()
+}

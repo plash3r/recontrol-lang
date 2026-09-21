@@ -50,6 +50,12 @@ rcl build main.rcl
 rcl run main.rcl
 rcl emit-llvm main.rcl
 rcl new hello
+
+# inside a project containing rcl.toml:
+rcl check
+rcl build
+rcl run
+rcl test
 ~~~
 
 The rcl command works directly with .rcl source files.
@@ -57,18 +63,20 @@ The rcl command works directly with .rcl source files.
 ### Commands
 
 ~~~text
-rcl check <file.rcl>       Check source
-rcl build <file.rcl>       Build a native executable
-rcl run <file.rcl>         Build and run a native executable
-rcl emit-llvm <file.rcl>   Emit LLVM IR
-rcl new <name>              Create a new project
-rcl --version               Show compiler version
-rcl --help                  Show help
+rcl check [file.rcl]       Check a file or the current project
+rcl build [file.rcl]       Build a file or the current project
+rcl run [file.rcl]         Build and run a file or the current project
+rcl test                   Build and run tests/*.rcl in the current project
+rcl fmt [file.rcl]         Format a file or the current project entry
+rcl emit-llvm [file.rcl]   Emit LLVM IR for a file or project
+rcl new <name>             Create a new project
+rcl --version              Show compiler version
+rcl --help                 Show help
 ~~~
 
 rcl build produces a native executable next to the source file. LLVM IR can be requested explicitly with rcl emit-llvm.
 
-The current compiler uses clang to turn LLVM IR into a native executable. The compiler contains the small Rust runtime required by the current print and println builtins. No C runtime source is used.
+The current compiler uses clang to turn LLVM IR into a native executable. Release bundles include a prebuilt native RCL runtime next to the compiler, so normal `rcl build` and `rcl run` do not invoke `rustc`. No C runtime source is used. Set `RCL_RUNTIME` only when developing with a runtime library stored outside the normal install layout.
 
 ## Development installation
 
@@ -87,7 +95,7 @@ This requires the Rust toolchain. Normal RCL users should use the prebuilt insta
 ~~~bash
 rcl new hello
 cd hello
-rcl run src/main.rcl
+rcl run
 ~~~
 
 The generated program should print:
@@ -101,8 +109,9 @@ Generated project:
 ~~~text
 hello/
 ├── rcl.toml
-└── src/
-    └── main.rcl
+├── src/
+│   └── main.rcl
+└── tests/
 ~~~
 
 ## Example
@@ -149,7 +158,21 @@ fn main() {
 }
 ~~~
 
-`math.rcl` is compiled as part of the same program, so its functions, structs, and `impl` blocks are available to the importing file. Imports are resolved relative to the file containing the `use` declaration. Cyclic imports and missing files are reported as compiler errors.
+`math.rcl` is compiled as part of the same program. Declarations are private to their source file by default; use `pub fn`, `pub struct`, `pub fn` on methods, and `pub` on struct fields to expose them to another imported file. Private helpers remain usable inside their own source file.
+
+For example, `math.rcl` can export:
+
+~~~rcl
+fn internal_helper(): i32 {
+    return 40
+}
+
+pub fn add(a: i32, b: i32): i32 {
+    return a + b
+}
+~~~
+
+Imports are resolved relative to the file containing the `use` declaration. Cyclic imports, missing files, and cross-file access to private declarations are reported as compiler errors with source locations.
 
 ## Compiler pipeline
 
@@ -160,3 +183,12 @@ RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> O
 The first backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, and print/println runtime calls.
 
 Struct field lowering, arrays, indirect calls, richer reference lowering, target-specific ABI details, and optimization passes remain separate backend milestones.
+
+
+## Defined semantics
+
+The language rules for short-circuit evaluation, integer overflow, integer
+division, numeric literal typing, fixed arrays, references, and source
+diagnostics are documented in
+`docs/language-semantics.md`. These behaviors are regression-tested and should
+not be changed accidentally by backend work.

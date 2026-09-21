@@ -1,20 +1,59 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    pub source_id: usize,
     pub line: usize,
     pub column: usize,
     pub length: usize,
+    pub end_line: usize,
+    pub end_column: usize,
 }
 
 impl Span {
-    fn new(line: usize, column: usize, length: usize) -> Self {
-        Self { line, column, length }
+    pub const fn new(line: usize, column: usize, length: usize) -> Self {
+        Self {
+            source_id: 0,
+            line,
+            column,
+            length,
+            end_line: line,
+            end_column: column + length,
+        }
+    }
+
+    pub const fn in_source(source_id: usize, line: usize, column: usize, length: usize) -> Self {
+        Self {
+            source_id,
+            line,
+            column,
+            length,
+            end_line: line,
+            end_column: column + length,
+        }
+    }
+
+    pub const fn synthetic() -> Self { Self::new(1, 1, 0) }
+
+    pub fn join(self, other: Span) -> Self {
+        if self.source_id != other.source_id { return self; }
+        Self {
+            source_id: self.source_id,
+            line: self.line,
+            column: self.column,
+            length: if self.line == other.end_line {
+                other.end_column.saturating_sub(self.column)
+            } else {
+                self.length.max(1)
+            },
+            end_line: other.end_line,
+            end_column: other.end_column,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Pub, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus,
@@ -41,12 +80,26 @@ pub struct Lexer<'a> {
     current: usize,
     line: usize,
     column: usize,
+    source_id: usize,
     _source: &'a str,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Self {
-        Self { chars: source.chars().collect(), current: 0, line: 1, column: 1, _source: source }
+    pub fn new(source: &'a str) -> Self { Self::with_source_id(source, 0) }
+
+    pub fn with_source_id(source: &'a str, source_id: usize) -> Self {
+        Self {
+            chars: source.chars().collect(),
+            current: 0,
+            line: 1,
+            column: 1,
+            source_id,
+            _source: source,
+        }
+    }
+
+    fn span(&self, line: usize, column: usize, length: usize) -> Span {
+        Span::in_source(self.source_id, line, column, length)
     }
 
     pub fn tokenize(mut self) -> Result<Vec<Token>, Vec<LexError>> {
@@ -100,11 +153,11 @@ impl<'a> Lexer<'a> {
                 ',' => tokens.push(self.token(TokenKind::Comma, ",", line, column, 1)),
                 '.' => tokens.push(self.token(TokenKind::Dot, ".", line, column, 1)),
                 ';' => tokens.push(self.token(TokenKind::Semicolon, ";", line, column, 1)),
-                c => errors.push(LexError { message: format!("unexpected character: {}", c), span: Span::new(line, column, 1) }),
+                c => errors.push(LexError { message: format!("unexpected character: {}", c), span: self.span(line, column, 1) }),
             }
         }
 
-        tokens.push(Token { kind: TokenKind::Eof, lexeme: String::new(), span: Span::new(self.line, self.column, 0) });
+        tokens.push(Token { kind: TokenKind::Eof, lexeme: String::new(), span: self.span(self.line, self.column, 0) });
         if errors.is_empty() { Ok(tokens) } else { Err(errors) }
     }
 
@@ -112,12 +165,12 @@ impl<'a> Lexer<'a> {
         let mut text = first.to_string();
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
-            "let" => TokenKind::Let, "mut" => TokenKind::Mut, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
+            "let" => TokenKind::Let, "mut" => TokenKind::Mut, "pub" => TokenKind::Pub, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl, "use" => TokenKind::Use, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
             "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
         };
-        Token { kind, lexeme: text.clone(), span: Span::new(line, column, text.chars().count()) }
+        Token { kind, lexeme: text.clone(), span: self.span(line, column, text.chars().count()) }
     }
 
     fn number(&mut self, first: char, line: usize, column: usize) -> Token {
@@ -128,14 +181,14 @@ impl<'a> Lexer<'a> {
             while !self.is_at_end() && self.peek().is_ascii_digit() { text.push(self.advance()); }
         }
         while !self.is_at_end() && self.peek().is_ascii_alphanumeric() { text.push(self.advance()); }
-        Token { kind: TokenKind::Number, lexeme: text.clone(), span: Span::new(line, column, text.chars().count()) }
+        Token { kind: TokenKind::Number, lexeme: text.clone(), span: self.span(line, column, text.chars().count()) }
     }
 
     fn string(&mut self, line: usize, column: usize) -> Result<Token, LexError> {
         let mut text = String::new();
         while !self.is_at_end() && self.peek() != '"' {
             if self.peek() == '\n' {
-                return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
+                return Err(LexError { message: "unterminated string literal".into(), span: self.span(line, column, self.column.saturating_sub(column)) });
             }
             if self.peek() == '\\' {
                 self.advance();
@@ -154,10 +207,10 @@ impl<'a> Lexer<'a> {
             }
         }
         if self.is_at_end() {
-            return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
+            return Err(LexError { message: "unterminated string literal".into(), span: self.span(line, column, self.column.saturating_sub(column)) });
         }
         self.advance();
-        Ok(Token { kind: TokenKind::String, lexeme: text.clone(), span: Span::new(line, column, text.chars().count() + 2) })
+        Ok(Token { kind: TokenKind::String, lexeme: text.clone(), span: self.span(line, column, text.chars().count() + 2) })
     }
 
     fn skip_comment(&mut self) { while !self.is_at_end() && self.peek() != '\n' { self.advance(); } }
@@ -174,7 +227,7 @@ impl<'a> Lexer<'a> {
     }
     fn is_at_end(&self) -> bool { self.current >= self.chars.len() }
     fn token(&self, kind: TokenKind, lexeme: &str, line: usize, column: usize, length: usize) -> Token {
-        Token { kind, lexeme: lexeme.into(), span: Span::new(line, column, length) }
+        Token { kind, lexeme: lexeme.into(), span: self.span(line, column, length) }
     }
 }
 

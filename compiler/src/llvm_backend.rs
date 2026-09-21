@@ -22,7 +22,7 @@ struct Cx<'a> {
 
 impl LlvmBackend {
     pub fn emit(program: &MirProgram) -> Result<String, Vec<CodegenError>> {
-        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\ndeclare void @rcl_print_i8(i8)\ndeclare void @rcl_println_i8(i8)\ndeclare void @rcl_print_i32(i32)\ndeclare void @rcl_println_i32(i32)\ndeclare void @rcl_check_bounds_i32(i32, i32)\n\n");
+        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\ndeclare void @rcl_print_i8(i8)\ndeclare void @rcl_println_i8(i8)\ndeclare void @rcl_print_i32(i32)\ndeclare void @rcl_println_i32(i32)\ndeclare void @rcl_check_bounds_i32(i32, i32)\ndeclare void @rcl_check_divisor(i32)\ndeclare void @rcl_check_div_overflow(i32)\n\n");
         let mut strings = Vec::new();
         let mut functions = String::new();
         let mut errors = Vec::new();
@@ -210,6 +210,27 @@ impl<'a> Cx<'a> {
 
     fn binary(&mut self, l: &Operand, op: BinaryOp, r: &Operand) -> Result<String, Vec<CodegenError>> {
         let a=self.operand(l)?; let b=self.operand(r)?; let ty=self.operand_type(l)?; let t=self.tmp(); let q=llvm_type(&ty);
+        if ty.is_integer() && matches!(op, BinaryOp::Divide | BinaryOp::Modulo) {
+            let zero = self.tmp();
+            let zero_i32 = self.tmp();
+            writeln!(self.pending, "  %{zero} = icmp eq {q} {b}, 0").unwrap();
+            writeln!(self.pending, "  %{zero_i32} = zext i1 %{zero} to i32").unwrap();
+            writeln!(self.pending, "  call void @rcl_check_divisor(i32 %{zero_i32})").unwrap();
+
+            if !unsigned(&ty) {
+                let bits = integer_bits(&ty).unwrap_or(32);
+                let min = format!("-{}", decimal_pow2(bits - 1));
+                let is_min = self.tmp();
+                let is_neg_one = self.tmp();
+                let overflow = self.tmp();
+                let overflow_i32 = self.tmp();
+                writeln!(self.pending, "  %{is_min} = icmp eq {q} {a}, {min}").unwrap();
+                writeln!(self.pending, "  %{is_neg_one} = icmp eq {q} {b}, -1").unwrap();
+                writeln!(self.pending, "  %{overflow} = and i1 %{is_min}, %{is_neg_one}").unwrap();
+                writeln!(self.pending, "  %{overflow_i32} = zext i1 %{overflow} to i32").unwrap();
+                writeln!(self.pending, "  call void @rcl_check_div_overflow(i32 %{overflow_i32})").unwrap();
+            }
+        }
         let s=if is_float(&ty) {
             match op {
                 BinaryOp::Add=>format!("fadd {q} {a}, {b}"), BinaryOp::Subtract=>format!("fsub {q} {a}, {b}"),
@@ -255,7 +276,7 @@ impl<'a> Cx<'a> {
             if args.is_empty() { return self.err_result("print/println expects at least one argument"); }
             if args.len() == 1 {
                 if let Operand::Copy(place) | Operand::Move(place) = &args[0] {
-                    if matches!(self.operand_type(&args[0])?, Type::Array(_)) {
+                    if matches!(self.operand_type(&args[0])?, Type::Array { .. }) {
                         self.emit_print_array(place, *id == BUILTIN_PRINTLN_ID)?;
                         return Ok(String::new());
                     }
@@ -342,7 +363,7 @@ impl<'a> Cx<'a> {
     }
 
     fn emit_print_array(&mut self, place: &Place, newline: bool) -> Result<(), Vec<CodegenError>> {
-        let Type::Array(element_type) = self.place_type(place)? else {
+        let Type::Array { element: element_type, .. } = self.place_type(place)? else {
             return self.err_result("print array expects an array value");
         };
         let length = self.array_length(place)?;
@@ -457,8 +478,19 @@ impl<'a> Cx<'a> {
 
     fn array_length(&self, place: &Place) -> Result<usize, Vec<CodegenError>> {
         match place {
-            Place::Local(local) => self.array_lengths.get(local).copied().ok_or_else(|| vec![self.err("array length is unavailable")]),
-            _ => Err(vec![self.err("array length is unavailable for this expression")]),
+            Place::Local(local) => {
+                if let Some(length) = self.array_lengths.get(local).copied() {
+                    return Ok(length);
+                }
+                match self.locals.get(local) {
+                    Some(Type::Array { len, .. }) => Ok(*len),
+                    _ => Err(vec![self.err("array length is unavailable")]),
+                }
+            }
+            _ => match self.place_type(place)? {
+                Type::Array { len, .. } => Ok(len),
+                _ => Err(vec![self.err("array length is unavailable for this expression")]),
+            },
         }
     }
 
@@ -477,7 +509,7 @@ impl<'a> Cx<'a> {
                     .ok_or_else(|| vec![self.err("unknown struct field")])
             }
             Place::Index { base, .. } => match self.place_type(base)? {
-                Type::Array(inner) => Ok(*inner),
+                Type::Array { element, .. } => Ok(*element),
                 _ => self.err_result("index base is not an array"),
             },
         }
@@ -544,13 +576,13 @@ impl<'a> Cx<'a> {
         let mut n="@.str.".to_string(); for b in &bytes { write!(n,"{:02X}",b).unwrap(); } self.strings.push((n.clone(),bytes)); n
     }
 
-    fn tmp(&mut self)->usize { let n=self.next; self.next+=1; n }
+    fn tmp(&mut self)->String { let n=self.next; self.next+=1; format!("tmp{n}") }
     fn take_pending(&mut self)->String { std::mem::take(&mut self.pending) }
     fn err(&self,msg:&str)->CodegenError { CodegenError{function:self.function.name.clone(),message:msg.into()} }
     fn err_result<T>(&self,msg:&str)->Result<T,Vec<CodegenError>> { Err(vec![self.err(msg)]) }
 }
 
-fn split_number(n:&str)->(&str,&str) { let mut i=n.len(); while i>0&&n.as_bytes()[i-1].is_ascii_alphabetic(){i-=1;} (&n[..i],&n[i..]) }
+fn split_number(n:&str)->(&str,&str) { let i=n.find(|c:char| c.is_ascii_alphabetic()).unwrap_or(n.len()); (&n[..i],&n[i..]) }
 fn number_type(n:&str)->Type {
     let l=n.to_ascii_lowercase();
     for s in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"] {
@@ -561,13 +593,31 @@ fn number_type(n:&str)->Type {
     }
     if l.contains('.') { Type::F64 } else { Type::I32 }
 }
+fn integer_bits(t:&Type)->Option<u32> { match t {
+    Type::I8|Type::U8=>Some(8), Type::I16|Type::U16=>Some(16), Type::I32|Type::U32=>Some(32),
+    Type::I64|Type::U64=>Some(64), Type::I128|Type::U128=>Some(128), Type::I256|Type::U256=>Some(256),
+    _=>None,
+} }
+fn decimal_pow2(exp:u32)->String {
+    let mut digits=vec![1u8];
+    for _ in 0..exp {
+        let mut carry=0u16;
+        for digit in &mut digits {
+            let value=(*digit as u16)*2+carry;
+            *digit=(value%10) as u8;
+            carry=value/10;
+        }
+        while carry>0 { digits.push((carry%10) as u8); carry/=10; }
+    }
+    digits.iter().rev().map(|d| char::from(b'0'+*d)).collect()
+}
 fn is_float(t:&Type)->bool { matches!(t,Type::F32|Type::F64|Type::F128) }
 fn unsigned(t:&Type)->bool { matches!(t,Type::U8|Type::U16|Type::U32|Type::U64|Type::U128|Type::U256) }
 fn llvm_type(t:&Type)->String { match t {
     Type::I8|Type::U8=>"i8", Type::I16|Type::U16=>"i16", Type::I32|Type::U32|Type::Char=>"i32",
     Type::I64|Type::U64=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
     Type::F32=>"float",Type::F64=>"double",Type::F128=>"fp128",Type::Bool=>"i1",Type::Str|Type::Reference{..}=>"ptr",
-    Type::Unit=>"void",Type::Named(n)=>return format!("%{}",n),Type::Array(_)|Type::Unknown=>"ptr"
+    Type::Unit=>"void",Type::Named(n)=>return format!("%{}",n),Type::Array { .. }|Type::Unknown=>"ptr"
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }

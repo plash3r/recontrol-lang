@@ -1,0 +1,8 @@
+fn sum3(values: i32[3]): i32 {
+    return values[0] + values[1] + values[2]
+}
+
+fn main() {
+    let values: i32[3] = [1, 2, 3]
+    println(sum3(values))
+}

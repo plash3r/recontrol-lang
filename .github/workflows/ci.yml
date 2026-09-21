@@ -13,10 +13,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Test
-        run: timeout 20s cargo test -p rcl borrowck::tests::mutable_borrow_blocks_mutation -- --exact --nocapture
+      - name: Test full workspace
+        run: cargo test --workspace --all-targets
       - name: Check
         run: cargo check --workspace
+      - name: Formatter check
+        run: cargo run -p rcl -- fmt --check examples/hello.rcl
 
   llvm:
     runs-on: ubuntu-latest
@@ -25,7 +27,53 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Build shipped runtime
+        run: cargo build -p rcl-runtime
       - name: Build and run native executable
         run: cargo run -p rcl -- run examples/hello.rcl
       - name: Build and run i256 HPC demo
         run: cargo run -p rcl -- run examples/hpc_i256.rcl
+      - name: Verify short-circuit execution
+        run: cargo run -p rcl -- run tests/programs/run-pass/short_circuit.rcl
+      - name: Verify fixed arrays cross function boundaries
+        run: cargo run -p rcl -- run tests/programs/run-pass/array_parameter.rcl
+      - name: Verify public imported declarations
+        run: cargo run -p rcl -- run tests/programs/run-pass/public-import/main.rcl
+      - name: Verify literals wider than u128
+        run: cargo run -p rcl -- run tests/programs/run-pass/i256_wide_literal.rcl
+      - name: Verify integer division by zero is deterministic
+        shell: bash
+        run: |
+          if cargo run -p rcl -- run tests/programs/run-fail/divide_by_zero.rcl; then
+            echo "expected divide-by-zero program to fail" >&2
+            exit 1
+          fi
+      - name: Verify compile-fail programs
+        shell: bash
+        run: |
+          files=(
+            tests/programs/compile-fail/i256_overflow.rcl
+            tests/programs/compile-fail/borrow_conflict.rcl
+            tests/programs/compile-fail/import-error/main.rcl
+            tests/programs/compile-fail/private-import/main.rcl
+          )
+          for file in "${files[@]}"; do
+            if cargo run -p rcl -- check "$file"; then
+              echo "expected $file to fail" >&2
+              exit 1
+            fi
+          done
+      - name: Verify imported-file diagnostics
+        shell: bash
+        run: |
+          output="$(cargo run -p rcl -- check tests/programs/compile-fail/import-error/main.rcl 2>&1 || true)"
+          echo "$output"
+          grep -F "broken.rcl:" <<<"$output"
+          grep -F "missing_value" <<<"$output"
+      - name: Verify borrow diagnostics include origin
+        shell: bash
+        run: |
+          output="$(cargo run -p rcl -- check tests/programs/compile-fail/borrow_conflict.rcl 2>&1 || true)"
+          echo "$output"
+          grep -F "note:" <<<"$output"
+          grep -F "existing mutable borrow starts here" <<<"$output"

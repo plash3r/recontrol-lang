@@ -1,0 +1,5 @@
+use "lib.rcl"
+
+fn main() {
+    println(secret())
+}

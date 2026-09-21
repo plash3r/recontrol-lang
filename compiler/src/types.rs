@@ -11,7 +11,7 @@ pub enum Type {
     Unit,
     Named(String),
     Reference { mutable: bool, inner: Box<Type> },
-    Array(Box<Type>),
+    Array { element: Box<Type>, len: usize },
     Unknown,
 }
 
@@ -28,10 +28,9 @@ impl Type {
             other => Type::Named(other.into()),
         };
 
-        let base = if type_ref.array_len.is_some() {
-            Type::Array(Box::new(base))
-        } else {
-            base
+        let base = match type_ref.array_len {
+            Some(len) => Type::Array { element: Box::new(base), len },
+            None => base,
         };
 
         match type_ref.reference {
@@ -42,13 +41,14 @@ impl Type {
     }
 
     pub fn is_copy(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::I256 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::U256 |
-            Type::F32 | Type::F64 | Type::F128 | Type::Bool | Type::Char | Type::Unit |
-            Type::Reference { .. }
-        )
+            Type::F32 | Type::F64 | Type::F128 | Type::Bool | Type::Char | Type::Unit => true,
+            Type::Reference { mutable: false, .. } => true,
+            Type::Array { element, .. } => element.is_copy(),
+            Type::Reference { mutable: true, .. } | Type::Str | Type::Named(_) | Type::Unknown => false,
+        }
     }
 
     pub fn is_integer(&self) -> bool {
@@ -71,8 +71,29 @@ impl Type {
             Type::Char => "char".into(), Type::Str => "str".into(), Type::Unit => "void".into(),
             Type::Named(name) => name.clone(),
             Type::Reference { mutable, inner } => format!("&{}{}", if *mutable { "mut " } else { "" }, inner.display_name()),
-            Type::Array(inner) => format!("[{}]", inner.display_name()),
+            Type::Array { element, len } => format!("{}[{}]", element.display_name(), len),
             Type::Unknown => "<unknown>".into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutable_references_are_not_copy() {
+        let shared = Type::Reference { mutable: false, inner: Box::new(Type::I32) };
+        let mutable = Type::Reference { mutable: true, inner: Box::new(Type::I32) };
+        assert!(shared.is_copy());
+        assert!(!mutable.is_copy());
+    }
+
+    #[test]
+    fn fixed_array_length_is_part_of_the_type() {
+        assert_ne!(
+            Type::Array { element: Box::new(Type::I32), len: 3 },
+            Type::Array { element: Box::new(Type::I32), len: 100 },
+        );
     }
 }
