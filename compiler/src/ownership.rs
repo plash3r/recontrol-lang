@@ -197,7 +197,7 @@ impl OwnershipChecker {
                     }
                 };
                 self.ensure_available(name, env);
-                if consume && !ty.is_copy() && !matches!(ty, Type::Reference { .. }) {
+                if consume && !ty.is_copy() {
                     self.move_value(name, env);
                 }
                 ty
@@ -244,16 +244,16 @@ impl OwnershipChecker {
             Expr::Array(values) => {
                 for value in values { self.expr(value, env, true); }
                 if values.is_empty() {
-                    Type::Array(Box::new(Type::Unknown))
+                    Type::Array { element: Box::new(Type::Unknown), len: 0 }
                 } else {
-                    Type::Array(Box::new(self.expr_type(&values[0], env)))
+                    Type::Array { element: Box::new(self.expr_type(&values[0], env)), len: values.len() }
                 }
             }
             Expr::Index { object, index } => {
                 self.expr(object, env, false);
                 self.expr(index, env, false);
                 match self.expr_type(object, env) {
-                    Type::Array(inner) => *inner,
+                    Type::Array { element, .. } => *element,
                     Type::Str => Type::Char,
                     _ => Type::Unknown,
                 }
@@ -310,9 +310,9 @@ impl OwnershipChecker {
                 UnaryOp::BorrowMutable => Type::Reference { mutable: true, inner: Box::new(self.expr_type(expr, env)) },
                 _ => self.expr_type(expr, env),
             },
-            Expr::Array(xs) => xs.first().map(|x| Type::Array(Box::new(self.expr_type(x, env)))).unwrap_or(Type::Array(Box::new(Type::Unknown))),
+            Expr::Array(xs) => xs.first().map(|x| Type::Array { element: Box::new(self.expr_type(x, env)), len: xs.len() }).unwrap_or(Type::Array { element: Box::new(Type::Unknown), len: 0 }),
             Expr::Index { object, .. } => match self.expr_type(object, env) {
-                Type::Array(inner) => *inner,
+                Type::Array { element, .. } => *element,
                 Type::Str => Type::Char,
                 _ => Type::Unknown,
             },
