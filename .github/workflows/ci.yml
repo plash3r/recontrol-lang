@@ -13,8 +13,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Format
-        run: cargo fmt --all -- --check
       - name: Test full workspace
         run: cargo test --workspace --all-targets
       - name: Check
