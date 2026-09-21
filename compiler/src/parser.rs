@@ -56,9 +56,20 @@ impl Parser {
     fn parse_import(&mut self) -> Result<Item, ParseError> {
         let start = self.expect(TokenKind::Use, "expected use")?.span;
         let path = self.expect(TokenKind::String, "expected string path after use")?;
+        let mut end = path.span;
+        let alias = if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "as" {
+            self.advance();
+            let alias = self.expect_identifier_token("expected namespace name after as")?;
+            end = alias.span;
+            Some(alias.lexeme)
+        } else {
+            None
+        };
         Ok(Item::Import(Import {
             path: path.lexeme,
-            span: start.join(path.span),
+            alias,
+            target_source_id: None,
+            span: start.join(end),
         }))
     }
 
@@ -682,6 +693,18 @@ mod tests {
         match &program.items[0] {
             Item::Function(function) => assert_eq!(function.body.statements.len(), 3),
             _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parses_import_namespace() {
+        let program = parse("use \"math.rcl\" as math\nfn main(){}");
+        match &program.items[0] {
+            Item::Import(import) => {
+                assert_eq!(import.path, "math.rcl");
+                assert_eq!(import.alias.as_deref(), Some("math"));
+            }
+            _ => panic!("expected import"),
         }
     }
 
