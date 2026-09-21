@@ -355,12 +355,28 @@ impl SemanticAnalyzer {
             ExprKind::Literal(Literal::Bool(_)) => Type::Bool,
             ExprKind::Literal(Literal::String(_)) => Type::Str,
             ExprKind::Literal(Literal::Number(number)) => self.number_type(number),
-            ExprKind::Identifier(name) => env.get(name)
-                .or_else(|| self.functions.contains_key(name).then(|| Type::Named(format!("fn {}", name))))
-                .unwrap_or_else(|| {
-                    self.error_at(expression.span, format!("unknown identifier '{}'", name));
-                    Type::Unknown
-                }),
+            ExprKind::Identifier(name) => {
+                if let Some(ty) = env.get(name) {
+                    ty
+                } else {
+                    match self.resolve_function(expression.span.source_id, name) {
+                        Ok(Some(signature)) => {
+                            if signature.source_id != expression.span.source_id && !signature.public {
+                                self.error_at(expression.span, format!("function '{}' is private", name));
+                            }
+                            Type::Named(format!("fn {}", name))
+                        }
+                        Ok(None) => {
+                            self.error_at(expression.span, format!("unknown identifier '{}'", name));
+                            Type::Unknown
+                        }
+                        Err(()) => {
+                            self.error_at(expression.span, format!("ambiguous imported function '{}'", name));
+                            Type::Unknown
+                        }
+                    }
+                }
+            },
             ExprKind::Grouping(inner) => self.expr(inner, env),
             ExprKind::Unary { op, expr } => {
                 let ty = self.expr(expr, env);
@@ -487,6 +503,61 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn namespace_target(&self, source_id: usize, alias: &str) -> Option<usize> {
+        self.imports.get(&source_id)
+            .and_then(|imports| imports.iter()
+                .find(|import| import.alias.as_deref() == Some(alias))
+                .map(|import| import.target_source_id))
+    }
+
+    fn resolve_function(&self, source_id: usize, name: &str) -> Result<Option<FunctionSig>, ()> {
+        if let Some(signature) = self.functions.get(&(source_id, name.to_string())).cloned() {
+            return Ok(Some(signature));
+        }
+
+        let mut found = Vec::new();
+        if let Some(imports) = self.imports.get(&source_id) {
+            for import in imports.iter().filter(|import| import.alias.is_none()) {
+                if let Some(signature) = self.functions
+                    .get(&(import.target_source_id, name.to_string()))
+                    .cloned()
+                {
+                    found.push(signature);
+                }
+            }
+        }
+
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            _ => Err(()),
+        }
+    }
+
+    fn resolve_struct(&self, source_id: usize, name: &str) -> Result<Option<StructInfo>, ()> {
+        if let Some(info) = self.structs.get(&(source_id, name.to_string())).cloned() {
+            return Ok(Some(info));
+        }
+
+        let mut found = Vec::new();
+        if let Some(imports) = self.imports.get(&source_id) {
+            for import in imports.iter().filter(|import| import.alias.is_none()) {
+                if let Some(info) = self.structs
+                    .get(&(import.target_source_id, name.to_string()))
+                    .cloned()
+                {
+                    found.push(info);
+                }
+            }
+        }
+
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            _ => Err(()),
+        }
+    }
+
     fn call(&mut self, callee: &Expr, args: &[Expr], env: &Env, span: Span) -> Type {
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "println" || name == "print" {
@@ -511,17 +582,50 @@ impl SemanticAnalyzer {
                 }
                 return Type::I32;
             }
-            if let Some(signature) = self.functions.get(name).cloned() {
-                if signature.source_id != callee.span.source_id && !signature.public {
-                    self.error_at(callee.span, format!("function '{}' is private", name));
+
+            match self.resolve_function(callee.span.source_id, name) {
+                Ok(Some(signature)) => {
+                    if signature.source_id != callee.span.source_id && !signature.public {
+                        self.error_at(callee.span, format!("function '{}' is private", name));
+                    }
+                    return self.signature(&signature, args, env, span);
                 }
-                return self.signature(&signature, args, env, span);
+                Err(()) => {
+                    self.error_at(callee.span, format!("ambiguous imported function '{}'", name));
+                    return Type::Unknown;
+                }
+                Ok(None) => {}
             }
+
             self.error_at(callee.span, format!("unknown function '{}'", name));
             return Type::Unknown;
         }
 
         if let ExprKind::Member { object, name } = &callee.kind {
+            if let ExprKind::Identifier(namespace) = &object.kind {
+                if let Some(target_source_id) =
+                    self.namespace_target(callee.span.source_id, namespace)
+                {
+                    if let Some(signature) = self.functions
+                        .get(&(target_source_id, name.clone()))
+                        .cloned()
+                    {
+                        if !signature.public {
+                            self.error_at(
+                                callee.span,
+                                format!("function '{}.{}' is private", namespace, name),
+                            );
+                        }
+                        return self.signature(&signature, args, env, span);
+                    }
+                    self.error_at(
+                        callee.span,
+                        format!("namespace '{}' has no function '{}'", namespace, name),
+                    );
+                    return Type::Unknown;
+                }
+            }
+
             let object_ty = self.expr(object, env);
             let type_name = match object_ty {
                 Type::Named(name) => name,
@@ -531,7 +635,23 @@ impl SemanticAnalyzer {
                 },
                 _ => String::new(),
             };
-            if let Some(signature) = self.methods.get(&(type_name.clone(), name.clone())).cloned() {
+
+            let structure = match self.resolve_struct(callee.span.source_id, &type_name) {
+                Ok(value) => value,
+                Err(()) => {
+                    self.error_at(callee.span, format!("ambiguous imported type '{}'", type_name));
+                    return Type::Unknown;
+                }
+            };
+            let method_source = structure
+                .as_ref()
+                .map(|info| info.source_id)
+                .unwrap_or(callee.span.source_id);
+
+            if let Some(signature) = self.methods
+                .get(&(method_source, type_name.clone(), name.clone()))
+                .cloned()
+            {
                 if signature.source_id != callee.span.source_id && !signature.public {
                     self.error_at(callee.span, format!("method '{}.{}' is private", type_name, name));
                 }
@@ -583,7 +703,14 @@ impl SemanticAnalyzer {
             },
             _ => String::new(),
         };
-        if let Some(structure) = self.structs.get(&type_name).cloned() {
+        let structure = match self.resolve_struct(span.source_id, &type_name) {
+            Ok(value) => value,
+            Err(()) => {
+                self.error_at(span, format!("ambiguous imported type '{}'", type_name));
+                return Type::Unknown;
+            }
+        };
+        if let Some(structure) = structure {
             if structure.source_id != span.source_id && !structure.public {
                 self.error_at(span, format!("struct '{}' is private", type_name));
             }
@@ -599,9 +726,16 @@ impl SemanticAnalyzer {
     }
 
     fn struct_lit(&mut self, name: &str, fields: &[(String, Expr)], env: &Env, span: Span) -> Type {
-        let Some(info) = self.structs.get(name).cloned() else {
-            self.error_at(span, format!("unknown struct '{}'", name));
-            return Type::Unknown;
+        let info = match self.resolve_struct(span.source_id, name) {
+            Ok(Some(info)) => info,
+            Ok(None) => {
+                self.error_at(span, format!("unknown struct '{}'", name));
+                return Type::Unknown;
+            }
+            Err(()) => {
+                self.error_at(span, format!("ambiguous imported struct '{}'", name));
+                return Type::Unknown;
+            }
         };
         if info.source_id != span.source_id && !info.public {
             self.error_at(span, format!("struct '{}' is private", name));
