@@ -78,6 +78,8 @@ pub enum HirStmt {
     Let { local: LocalId, initializer: Option<HirExpr> },
     Expr(HirExpr),
     Return(Option<HirExpr>),
+    Break,
+    Continue,
     If { condition: HirExpr, then_branch: HirBlock, else_branch: Option<Box<HirStmt>> },
     While { condition: HirExpr, body: HirBlock },
     DoWhile { body: HirBlock, condition: HirExpr },
@@ -334,6 +336,8 @@ impl HirLowerer {
             }
             ast::StmtKind::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
             ast::StmtKind::Return(e) => HirStmt::Return(e.as_ref().map(|e| self.lower_expr(e))),
+            ast::StmtKind::Break => HirStmt::Break,
+            ast::StmtKind::Continue => HirStmt::Continue,
             ast::StmtKind::If { condition, then_branch, else_branch } => HirStmt::If {
                 condition: self.lower_expr(condition),
                 then_branch: self.lower_block(then_branch),
