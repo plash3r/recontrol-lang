@@ -446,7 +446,7 @@ mod tests {
     }
 
     fn manually_validate(function: MirFunction) -> Result<(), Vec<MirError>> {
-        MirValidator::validate(&MirProgram { functions: vec![function], structs: Vec::new() })
+        MirValidator::validate(&MirProgram { functions: vec![function], structs: Vec::new(), enums: Vec::new() })
     }
 
     #[test]
