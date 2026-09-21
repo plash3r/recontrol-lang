@@ -31,7 +31,10 @@ impl LlvmBackend {
             let fields = structure.fields.iter().map(|(_, ty)| llvm_type(ty)).collect::<Vec<_>>().join(", ");
             writeln!(module, "%{} = type {{ {} }}", structure.name, fields).unwrap();
         }
-        if !program.structs.is_empty() { module.push('\n'); }
+        for definition in &program.enums {
+            writeln!(module, "%{} = type {{ i32 }}", definition.name).unwrap();
+        }
+        if !program.structs.is_empty() || !program.enums.is_empty() { module.push('\n'); }
 
         for function in &program.functions {
             let mut cx = Cx {
@@ -180,6 +183,32 @@ impl<'a> Cx<'a> {
                     value = format!("%{next}");
                 }
                 Ok(value)
+            }
+            Rvalue::EnumVariant { name, discriminant } => {
+                if !self.program.enums.iter().any(|definition| definition.name == *name) {
+                    return self.err_result("unknown enum variant");
+                }
+                let next = self.tmp();
+                writeln!(
+                    self.pending,
+                    "  %{next} = insertvalue %{} zeroinitializer, i32 {}, 0",
+                    name,
+                    discriminant,
+                ).unwrap();
+                Ok(format!("%{next}"))
+            }
+            Rvalue::EnumTag { operand } => {
+                let value = self.operand(operand)?;
+                let ty = self.operand_type(operand)?;
+                let Type::Named(name) = ty else {
+                    return self.err_result("enum tag requested from a non-enum value");
+                };
+                if !self.program.enums.iter().any(|definition| definition.name == name) {
+                    return self.err_result("enum tag requested from a non-enum named type");
+                }
+                let next = self.tmp();
+                writeln!(self.pending, "  %{next} = extractvalue %{} {}, 0", name, value).unwrap();
+                Ok(format!("%{next}"))
             }
             Rvalue::Array(values) => {
                 let element_type = values.first().map(|value| self.operand_type(value)).transpose()?.unwrap_or(Type::Unknown);
@@ -555,6 +584,8 @@ impl<'a> Cx<'a> {
             Rvalue::Binary{left,op,..}=>if matches!(op,BinaryOp::Equal|BinaryOp::NotEqual|BinaryOp::Less|BinaryOp::LessEqual|BinaryOp::Greater|BinaryOp::GreaterEqual|BinaryOp::And|BinaryOp::Or){Some(Type::Bool)}else{self.static_operand_type(left,f)},
             Rvalue::Ref{mutable,place}=>self.static_place_type(place,f).map(|inner| Type::Reference { mutable:*mutable, inner:Box::new(inner) }),
             Rvalue::Call{callee:Operand::Function(id),..}=>self.signature(*id).ok().map(|(_,ret,_)|ret),
+            Rvalue::EnumVariant{name,..}=>Some(Type::Named(name.clone())),
+            Rvalue::EnumTag{..}=>Some(Type::I32),
             _=>None,
         }
     }
