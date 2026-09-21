@@ -188,29 +188,34 @@ fn main() {
 
 Namespaced imports do not inject their functions into the importing file's unqualified function namespace. This allows different modules to export functions with the same name. Plain `use "math.rcl"` remains available for unqualified imports.
 
-Fieldless enums and exhaustive `match` are supported:
+Enums may carry typed payloads and `match` destructures them safely:
 
 ~~~rcl
-enum Color {
-    Red
-    Green
+enum Message {
+    Empty
+    Number(i32)
+    Pair(i32, i32)
 }
 
 fn main() {
-    let color: Color = Color.Green
+    let message: Message = Message.Pair(20, 22)
 
-    match color {
-        Color.Red => {
-            println("red")
+    match message {
+        Message.Empty => {
+            println(0)
         }
-        Color.Green => {
-            println("green")
+        Message.Number(value) => {
+            println(value)
+        }
+        Message.Pair(left, right) => {
+            println(left + right)
         }
     }
 }
 ~~~
 
-The compiler rejects unknown variants, duplicate arms, and non-exhaustive enum matches.
+The compiler rejects wrong constructor payloads, wrong pattern binding counts,
+unknown variants, duplicate arms, and non-exhaustive enum matches.
 
 ## Compiler pipeline
 
@@ -218,9 +223,9 @@ RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> O
 
 ## LLVM backend milestone
 
-The LLVM backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, structs, fixed arrays, fieldless enums, exhaustive match lowering, and print/println runtime calls.
+The LLVM backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, structs, fixed arrays, payload enums, exhaustive match lowering, and print/println runtime calls.
 
-Indirect calls, richer reference lowering, payload-carrying enums, target-specific ABI details, and deeper optimization passes remain future backend milestones.
+Indirect calls, richer reference lowering, generic monomorphization, target-specific ABI details, and deeper optimization passes remain future backend milestones.
 
 
 ## Defined semantics
