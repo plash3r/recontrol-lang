@@ -8,6 +8,13 @@ pub type BasicBlockId = usize;
 pub struct MirProgram {
     pub functions: Vec<MirFunction>,
     pub structs: Vec<MirStruct>,
+    pub enums: Vec<MirEnum>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirEnum {
+    pub name: String,
+    pub variants: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +68,8 @@ pub enum Rvalue {
     Ref { mutable: bool, place: Place },
     Call { callee: Operand, args: Vec<Operand> },
     Aggregate { name: String, fields: Vec<(String, Operand)> },
+    EnumVariant { name: String, discriminant: usize },
+    EnumTag { operand: Operand },
     Array(Vec<Operand>),
 }
 
@@ -129,6 +138,10 @@ impl MirLowerer {
             structs: program.structs.iter().map(|structure| MirStruct {
                 name: structure.name.clone(),
                 fields: structure.fields.iter().map(|field| (field.name.clone(), field.ty.clone())).collect(),
+            }).collect(),
+            enums: program.enums.iter().map(|definition| MirEnum {
+                name: definition.name.clone(),
+                variants: definition.variants.clone(),
             }).collect(),
         }
     }
@@ -274,6 +287,8 @@ impl MirLowerer {
                 for (_, op) in fields { result.extend(Self::operand_locals(op)); }
                 result
             }
+            Rvalue::EnumVariant { .. } => std::collections::HashSet::new(),
+            Rvalue::EnumTag { operand } => Self::operand_locals(operand),
             Rvalue::Array(values) => {
                 let mut result = std::collections::HashSet::new();
                 for op in values { result.extend(Self::operand_locals(op)); }
@@ -347,6 +362,11 @@ impl MirLowerer {
                     Self::collect_stmt_locals(initializer, locals);
                 }
                 Self::collect_block_locals(body, locals);
+            }
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    Self::collect_block_locals(&arm.body, locals);
+                }
             }
             HirStmt::Block(block) => Self::collect_block_locals(block, locals),
             HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Return(_) => {}
@@ -508,6 +528,10 @@ impl MirLowerer {
                 base: Box::new(Self::lower_place(builder, locals, object)),
                 index: Box::new(Self::lower_operand(builder, locals, index)),
             })),
+            HirExprKind::EnumVariant { name, discriminant } => Rvalue::EnumVariant {
+                name: name.clone(),
+                discriminant: *discriminant,
+            },
             HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
         }
     }
@@ -613,6 +637,48 @@ impl MirLowerer {
                     else_block: exit,
                 });
                 builder.switch_to(exit);
+            }
+            HirStmt::Match { value, arms } => {
+                let value = Self::lower_operand(builder, locals, value);
+                let tag = Self::new_temp(locals, Type::I32);
+                builder.statement(MirStatement::StorageLive(tag));
+                builder.statement(MirStatement::Assign {
+                    place: Place::Local(tag),
+                    rvalue: Rvalue::EnumTag { operand: value },
+                });
+
+                let join = builder.new_block();
+                for arm in arms {
+                    let arm_block = builder.new_block();
+                    let next_test = builder.new_block();
+                    let condition = Self::new_temp(locals, Type::Bool);
+                    builder.statement(MirStatement::StorageLive(condition));
+                    builder.statement(MirStatement::Assign {
+                        place: Place::Local(condition),
+                        rvalue: Rvalue::Binary {
+                            left: Operand::Copy(Place::Local(tag)),
+                            op: BinaryOp::Equal,
+                            right: Operand::Constant(Literal::Number(arm.discriminant.to_string())),
+                        },
+                    });
+                    builder.finish_block(Terminator::SwitchBool {
+                        condition: Operand::Copy(Place::Local(condition)),
+                        then_block: arm_block,
+                        else_block: next_test,
+                    });
+
+                    builder.switch_to(arm_block);
+                    Self::lower_block(builder, &arm.body, locals);
+                    if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
+                        builder.finish_block(Terminator::Goto(join));
+                    }
+
+                    builder.switch_to(next_test);
+                }
+                if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
+                    builder.finish_block(Terminator::Unreachable);
+                }
+                builder.switch_to(join);
             }
             HirStmt::For { initializer, condition, update, body } => {
                 if let Some(init) = initializer {
