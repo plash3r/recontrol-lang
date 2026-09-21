@@ -33,6 +33,13 @@ struct StructInfo {
 }
 
 #[derive(Debug, Clone)]
+struct EnumInfo {
+    variants: Vec<String>,
+    public: bool,
+    source_id: usize,
+}
+
+#[derive(Debug, Clone)]
 struct ImportInfo {
     target_source_id: usize,
     alias: Option<String>,
@@ -77,6 +84,7 @@ impl Env {
 pub struct SemanticAnalyzer {
     functions: HashMap<(usize, String), FunctionSig>,
     structs: HashMap<(usize, String), StructInfo>,
+    enums: HashMap<(usize, String), EnumInfo>,
     methods: HashMap<(usize, String, String), FunctionSig>,
     imports: HashMap<usize, Vec<ImportInfo>>,
     errors: Vec<SemanticError>,
@@ -87,6 +95,7 @@ impl SemanticAnalyzer {
         let mut analyzer = Self {
             functions: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             methods: HashMap::new(),
             imports: HashMap::new(),
             errors: Vec::new(),
@@ -138,8 +147,8 @@ impl SemanticAnalyzer {
                 }
                 Item::Struct(structure) => {
                     let key = (structure.span.source_id, structure.name.clone());
-                    if self.structs.contains_key(&key) {
-                        self.error_at(structure.span, format!("duplicate struct '{}'", structure.name));
+                    if self.structs.contains_key(&key) || self.enums.contains_key(&key) {
+                        self.error_at(structure.span, format!("duplicate type '{}'", structure.name));
                         continue;
                     }
                     let mut fields = HashMap::new();
@@ -161,6 +170,34 @@ impl SemanticAnalyzer {
                             fields,
                             public: structure.public,
                             source_id: structure.span.source_id,
+                        },
+                    );
+                }
+                Item::Enum(definition) => {
+                    let key = (definition.span.source_id, definition.name.clone());
+                    if self.enums.contains_key(&key) || self.structs.contains_key(&key) {
+                        self.error_at(definition.span, format!("duplicate type '{}'", definition.name));
+                        continue;
+                    }
+
+                    let mut variants = Vec::new();
+                    for variant in &definition.variants {
+                        if variants.iter().any(|name| name == &variant.name) {
+                            self.error_at(
+                                variant.span,
+                                format!("duplicate enum variant '{}.{}'", definition.name, variant.name),
+                            );
+                        } else {
+                            variants.push(variant.name.clone());
+                        }
+                    }
+
+                    self.enums.insert(
+                        key,
+                        EnumInfo {
+                            variants,
+                            public: definition.public,
+                            source_id: definition.span.source_id,
                         },
                     );
                 }
@@ -220,7 +257,7 @@ impl SemanticAnalyzer {
                         self.check_function(function, Some(&implementation.type_name));
                     }
                 }
-                Item::Struct(_) | Item::Import(_) => {}
+                Item::Struct(_) | Item::Enum(_) | Item::Import(_) => {}
             }
         }
     }
@@ -345,6 +382,72 @@ impl SemanticAnalyzer {
                 }
                 self.check_block(body, env, return_type);
                 env.pop();
+            }
+            StmtKind::Match { value, arms } => {
+                let value_ty = self.expr(value, env);
+                let Type::Named(enum_name) = value_ty else {
+                    self.error_at(value.span, "match value must be an enum");
+                    for arm in arms {
+                        self.check_block(&arm.body, env, return_type);
+                    }
+                    return;
+                };
+
+                let info = match self.resolve_enum(value.span.source_id, &enum_name) {
+                    Ok(Some(info)) => info,
+                    Ok(None) => {
+                        self.error_at(value.span, format!("unknown enum '{}'", enum_name));
+                        for arm in arms {
+                            self.check_block(&arm.body, env, return_type);
+                        }
+                        return;
+                    }
+                    Err(()) => {
+                        self.error_at(value.span, format!("ambiguous imported enum '{}'", enum_name));
+                        for arm in arms {
+                            self.check_block(&arm.body, env, return_type);
+                        }
+                        return;
+                    }
+                };
+
+                let mut seen = Vec::<String>::new();
+                for arm in arms {
+                    if arm.enum_name != enum_name {
+                        self.error_at(
+                            arm.span,
+                            format!("match arm uses enum '{}', expected '{}'", arm.enum_name, enum_name),
+                        );
+                    } else if !info.variants.iter().any(|variant| variant == &arm.variant) {
+                        self.error_at(
+                            arm.span,
+                            format!("unknown enum variant '{}.{}'", enum_name, arm.variant),
+                        );
+                    } else if seen.iter().any(|variant| variant == &arm.variant) {
+                        self.error_at(
+                            arm.span,
+                            format!("duplicate match arm '{}.{}'", enum_name, arm.variant),
+                        );
+                    } else {
+                        seen.push(arm.variant.clone());
+                    }
+                    self.check_block(&arm.body, env, return_type);
+                }
+
+                let missing = info.variants.iter()
+                    .filter(|variant| !seen.iter().any(|seen| seen == *variant))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    self.error_at(
+                        statement.span,
+                        format!(
+                            "non-exhaustive match for '{}': missing {}",
+                            enum_name,
+                            missing.join(", ")
+                        ),
+                    );
+                }
             }
             StmtKind::Block(block) => self.check_block(block, env, return_type),
         }
@@ -558,6 +661,30 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn resolve_enum(&self, source_id: usize, name: &str) -> Result<Option<EnumInfo>, ()> {
+        if let Some(info) = self.enums.get(&(source_id, name.to_string())).cloned() {
+            return Ok(Some(info));
+        }
+
+        let mut found = Vec::new();
+        if let Some(imports) = self.imports.get(&source_id) {
+            for import in imports.iter().filter(|import| import.alias.is_none()) {
+                if let Some(info) = self.enums
+                    .get(&(import.target_source_id, name.to_string()))
+                    .cloned()
+                {
+                    found.push(info);
+                }
+            }
+        }
+
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            _ => Err(()),
+        }
+    }
+
     fn call(&mut self, callee: &Expr, args: &[Expr], env: &Env, span: Span) -> Type {
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "println" || name == "print" {
@@ -694,6 +821,26 @@ impl SemanticAnalyzer {
     }
 
     fn member(&mut self, object: &Expr, name: &str, env: &Env, span: Span) -> Type {
+        if let ExprKind::Identifier(enum_name) = &object.kind {
+            match self.resolve_enum(span.source_id, enum_name) {
+                Ok(Some(info)) => {
+                    if info.source_id != span.source_id && !info.public {
+                        self.error_at(span, format!("enum '{}' is private", enum_name));
+                    }
+                    if info.variants.iter().any(|variant| variant == name) {
+                        return Type::Named(enum_name.clone());
+                    }
+                    self.error_at(span, format!("unknown enum variant '{}.{}'", enum_name, name));
+                    return Type::Unknown;
+                }
+                Err(()) => {
+                    self.error_at(span, format!("ambiguous imported enum '{}'", enum_name));
+                    return Type::Unknown;
+                }
+                Ok(None) => {}
+            }
+        }
+
         let ty = self.expr(object, env);
         let type_name = match ty {
             Type::Named(name) => name,
@@ -938,6 +1085,26 @@ mod tests {
         items.extend(left.items);
         items.extend(right.items);
         assert!(SemanticAnalyzer::check(&Program { items }).is_ok());
+    }
+
+    #[test]
+    fn enum_match_must_be_exhaustive() {
+        assert!(check(
+            "enum Color { Red, Green } fn main(){let c:Color=Color.Red match c { Color.Red => {} Color.Green => {} }}"
+        ).is_ok());
+        let errors = check(
+            "enum Color { Red, Green } fn main(){let c:Color=Color.Red match c { Color.Red => {} }}"
+        ).unwrap_err();
+        assert!(errors.iter().any(|error| error.message.contains("non-exhaustive")));
+    }
+
+    #[test]
+    fn enum_match_rejects_duplicate_and_unknown_arms() {
+        let errors = check(
+            "enum Color { Red, Green } fn main(){let c:Color=Color.Red match c { Color.Red => {} Color.Red => {} Color.Blue => {} }}"
+        ).unwrap_err();
+        assert!(errors.iter().any(|error| error.message.contains("duplicate match arm")));
+        assert!(errors.iter().any(|error| error.message.contains("unknown enum variant")));
     }
 
     #[test]
