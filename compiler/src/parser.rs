@@ -42,9 +42,14 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Fn => self.parse_function().map(Item::Function),
             TokenKind::Struct => self.parse_struct().map(Item::Struct),
+            TokenKind::Pub => match self.tokens.get(self.current + 1).map(|token| &token.kind) {
+                Some(TokenKind::Fn) => self.parse_function().map(Item::Function),
+                Some(TokenKind::Struct) => self.parse_struct().map(Item::Struct),
+                _ => Err(self.error_here("pub is currently supported on fn and struct items")),
+            },
             TokenKind::Impl => self.parse_impl().map(Item::Impl),
             TokenKind::Use => self.parse_import(),
-            _ => Err(self.error_here("expected use, fn, struct, or impl")),
+            _ => Err(self.error_here("expected use, fn, struct, impl, or pub")),
         }
     }
 
@@ -75,7 +80,14 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Result<Function, ParseError> {
-        let start = self.expect(TokenKind::Fn, "expected fn")?.span;
+        let visibility = if self.check(TokenKind::Pub) {
+            Some(self.advance().span)
+        } else {
+            None
+        };
+        let fn_token = self.expect(TokenKind::Fn, "expected fn")?;
+        let start = visibility.unwrap_or(fn_token.span);
+        let public = visibility.is_some();
         let name = self.expect_identifier_token("expected function name")?.lexeme;
         self.expect(TokenKind::LeftParen, "expected ( after function name")?;
         let mut params = Vec::new();
@@ -120,11 +132,18 @@ impl Parser {
         self.skip_newlines();
         let body = self.parse_block()?;
         let span = start.join(body.span);
-        Ok(Function { name, params, return_type, body, span })
+        Ok(Function { public, name, params, return_type, body, span })
     }
 
     fn parse_struct(&mut self) -> Result<StructDef, ParseError> {
-        let start = self.expect(TokenKind::Struct, "expected struct")?.span;
+        let visibility = if self.check(TokenKind::Pub) {
+            Some(self.advance().span)
+        } else {
+            None
+        };
+        let struct_token = self.expect(TokenKind::Struct, "expected struct")?;
+        let start = visibility.unwrap_or(struct_token.span);
+        let public = visibility.is_some();
         let name = self.expect_identifier_token("expected struct name")?.lexeme;
         self.skip_newlines();
         self.expect(TokenKind::LeftBrace, "expected { after struct name")?;
@@ -132,11 +151,12 @@ impl Parser {
         self.skip_newlines();
 
         while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+            let field_public = self.match_kind(TokenKind::Pub);
             let field_name = self.expect_identifier_token("expected field name")?;
             self.expect(TokenKind::Colon, "expected : after field name")?;
             let ty = self.parse_type()?;
             let span = field_name.span.join(ty.span);
-            fields.push(Field { name: field_name.lexeme, ty, span });
+            fields.push(Field { public: field_public, name: field_name.lexeme, ty, span });
 
             if self.match_kind(TokenKind::Comma) || self.match_kind(TokenKind::Semicolon) {
                 self.skip_newlines();
@@ -148,7 +168,7 @@ impl Parser {
         }
 
         let end = self.expect(TokenKind::RightBrace, "expected } after struct fields")?.span;
-        Ok(StructDef { name, fields, span: start.join(end) })
+        Ok(StructDef { public, name, fields, span: start.join(end) })
     }
 
     fn parse_block(&mut self) -> Result<Block, ParseError> {
@@ -575,7 +595,7 @@ impl Parser {
                 self.skip_newlines();
                 return;
             }
-            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::Impl | TokenKind::Use) { return; }
+            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::Impl | TokenKind::Use | TokenKind::Pub) { return; }
             if self.check(TokenKind::RightBrace) {
                 self.advance();
                 return;
@@ -661,6 +681,23 @@ mod tests {
         let program = parse("fn main() {\nlet x = 10\nif x > 0 {\nprintln(x)\n} else {\nprintln(0)\n}\nwhile x > 0 {\nprintln(x)\n}\n}");
         match &program.items[0] {
             Item::Function(function) => assert_eq!(function.body.statements.len(), 3),
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parses_visibility() {
+        let program = parse("pub struct Point { pub x: i32, y: i32 }\npub fn make(): i32 { return 1 }");
+        match &program.items[0] {
+            Item::Struct(structure) => {
+                assert!(structure.public);
+                assert!(structure.fields[0].public);
+                assert!(!structure.fields[1].public);
+            }
+            _ => panic!("expected struct"),
+        }
+        match &program.items[1] {
+            Item::Function(function) => assert!(function.public),
             _ => panic!("expected function"),
         }
     }
