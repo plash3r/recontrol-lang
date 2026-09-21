@@ -66,8 +66,9 @@ impl Env {
 }
 
 pub struct BorrowChecker {
-    functions: HashMap<String, FunctionSig>,
-    methods: HashMap<(String, String), FunctionSig>,
+    functions: HashMap<(usize, String), FunctionSig>,
+    methods: HashMap<(usize, String, String), FunctionSig>,
+    imports: HashMap<usize, Vec<(Option<String>, usize)>>,
     errors: Vec<BorrowError>,
     active: HashMap<String, Vec<ActiveBorrow>>,
     scope: usize,
@@ -78,6 +79,7 @@ impl BorrowChecker {
         let mut checker = Self {
             functions: HashMap::new(),
             methods: HashMap::new(),
+            imports: HashMap::new(),
             errors: Vec::new(),
             active: HashMap::new(),
             scope: 0,
@@ -128,10 +130,19 @@ impl BorrowChecker {
     fn collect(&mut self, program: &Program) {
         for item in &program.items {
             match item {
+                Item::Import(import) => {
+                    if let Some(target_source_id) = import.target_source_id {
+                        self.imports.entry(import.span.source_id).or_default()
+                            .push((import.alias.clone(), target_source_id));
+                    }
+                }
                 Item::Function(function) => {
-                    self.functions.insert(function.name.clone(), FunctionSig {
-                        params: function.params.iter().map(|p| Type::from_ref(&p.ty)).collect(),
-                    });
+                    self.functions.insert(
+                        (function.span.source_id, function.name.clone()),
+                        FunctionSig {
+                            params: function.params.iter().map(|p| Type::from_ref(&p.ty)).collect(),
+                        },
+                    );
                 }
                 Item::Impl(implementation) => {
                     for method in &implementation.methods {
@@ -146,21 +157,26 @@ impl BorrowChecker {
                             }
                         }).collect();
                         self.methods.insert(
-                            (implementation.type_name.clone(), method.name.clone()),
+                            (
+                                implementation.span.source_id,
+                                implementation.type_name.clone(),
+                                method.name.clone(),
+                            ),
                             FunctionSig { params },
                         );
                     }
                 }
-                Item::Struct(_) | Item::Import(_) => {}
+                Item::Struct(_) => {}
             }
         }
     }
 
     fn check_function(&mut self, function: &Function, impl_type: Option<&str>) {
+        let source_id = function.span.source_id;
         let signature = if let Some(type_name) = impl_type {
-            self.methods.get(&(type_name.to_string(), function.name.clone())).cloned()
+            self.methods.get(&(source_id, type_name.to_string(), function.name.clone())).cloned()
         } else {
-            self.functions.get(&function.name).cloned()
+            self.functions.get(&(source_id, function.name.clone())).cloned()
         };
         let Some(signature) = signature else { return };
 
@@ -318,22 +334,57 @@ impl BorrowChecker {
         }
     }
 
+    fn namespace_target(&self, source_id: usize, alias: &str) -> Option<usize> {
+        self.imports.get(&source_id)
+            .and_then(|imports| imports.iter()
+                .find(|(candidate, _)| candidate.as_deref() == Some(alias))
+                .map(|(_, target)| *target))
+    }
+
+    fn resolve_function(&self, source_id: usize, name: &str) -> Option<FunctionSig> {
+        if let Some(signature) = self.functions.get(&(source_id, name.to_string())).cloned() {
+            return Some(signature);
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .find_map(|(_, target)| self.functions.get(&(*target, name.to_string())).cloned())
+    }
+
     fn check_call(&mut self, callee: &Expr, args: &[Expr], env: &Env) {
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "print" || name == "println" || name == "typeof" || name == "len" {
                 for argument in args { self.check_expression(argument, env); }
                 return;
             }
-            if let Some(signature) = self.functions.get(name).cloned() {
+            if let Some(signature) = self.resolve_function(callee.span.source_id, name) {
                 self.check_signature(&signature, args, env);
                 return;
             }
         }
 
         if let ExprKind::Member { object, name } = &callee.kind {
+            if let ExprKind::Identifier(namespace) = &object.kind {
+                if let Some(target_source_id) =
+                    self.namespace_target(callee.span.source_id, namespace)
+                {
+                    if let Some(signature) = self.functions
+                        .get(&(target_source_id, name.clone()))
+                        .cloned()
+                    {
+                        self.check_signature(&signature, args, env);
+                        return;
+                    }
+                }
+            }
+
             self.check_expression(object, env);
             let type_name = self.object_type_name(object);
-            if let Some(signature) = self.methods.get(&(type_name, name.clone())).cloned() {
+            if let Some(signature) = self.methods
+                .get(&(callee.span.source_id, type_name, name.clone()))
+                .cloned()
+            {
                 let mut all = vec![object.as_ref().clone()];
                 all.extend_from_slice(args);
                 self.check_signature(&signature, &all, env);
