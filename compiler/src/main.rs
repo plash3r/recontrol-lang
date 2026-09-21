@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rcl::ast::{Item, Program};
 use rcl::borrowck::BorrowChecker;
 use rcl::hir::HirLowerer;
 use rcl::llvm_backend::LlvmBackend;
@@ -36,17 +37,35 @@ pub extern "C" fn rcl_println(s: *const u8) {
     let text = String::from_utf8_lossy(bytes);
     println!("{text}");
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_print_i8(value: i8) { print!("{value}"); let _ = io::stdout().flush(); }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_println_i8(value: i8) { println!("{value}"); let _ = io::stdout().flush(); }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_print_i32(value: i32) { print!("{value}"); let _ = io::stdout().flush(); }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_println_i32(value: i32) { println!("{value}"); let _ = io::stdout().flush(); }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rcl_check_bounds_i32(index: i32, length: i32) {
+    if index < 0 || index >= length {
+        eprintln!("rcl: array index {index} is out of bounds for length {length}");
+        let _ = io::stderr().flush();
+        std::process::exit(1);
+    }
+}
 "#;
 
 fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("rcl: cannot read {path}: {e}"))?;
-    let tokens = Lexer::new(&source).tokenize()
-        .map_err(|e| format_errors(e.into_iter().map(|x| format!("{}:{}: {}", x.span.line, x.span.column, x.message)).collect()))?;
-    let program = Parser::new(tokens).parse()
-        .map_err(|e| format_errors(e.into_iter().map(|x| format!("{}:{}: {}", x.span.line, x.span.column, x.message)).collect()))?;
-    SemanticAnalyzer::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
-    BorrowChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
-    OwnershipChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
+    let program = load_program(Path::new(path), &mut Vec::new())?;
+    SemanticAnalyzer::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
+    BorrowChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
+    OwnershipChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
 
     let hir = HirLowerer::lower(&program);
     let mut mir = MirLowerer::lower(&hir);
@@ -57,8 +76,79 @@ fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
     Ok(mir)
 }
 
+fn load_program(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Program, String> {
+    let canonical = path.canonicalize().map_err(|e| format!("rcl: cannot resolve {}: {e}", path.display()))?;
+    if let Some(index) = stack.iter().position(|item| item == &canonical) {
+        let mut cycle = stack[index..].iter().map(|item| item.display().to_string()).collect::<Vec<_>>();
+        cycle.push(canonical.display().to_string());
+        return Err(format!("rcl: cyclic import: {}", cycle.join(" -> ")));
+    }
+
+    let source = fs::read_to_string(&canonical).map_err(|e| format!("rcl: cannot read {}: {e}", canonical.display()))?;
+    let tokens = Lexer::new(&source).tokenize()
+        .map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(&canonical.display().to_string(), &source, x.span, x.message)).collect()))?;
+    let program = Parser::new(tokens).parse()
+        .map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(&canonical.display().to_string(), &source, x.span, x.message)).collect()))?;
+    stack.push(canonical.clone());
+    let mut items = Vec::new();
+    for item in program.items {
+        match item {
+            Item::Import(import) => {
+                let import_path = resolve_import_path(canonical.parent().unwrap_or(Path::new(".")), &import);
+                items.extend(load_program(&import_path, stack)?.items);
+            }
+            item => items.push(item),
+        }
+    }
+    stack.pop();
+    Ok(Program { items })
+}
+
+fn resolve_import_path(base: &Path, import: &str) -> PathBuf {
+    let requested = base.join(import);
+    if requested.extension().is_none() {
+        requested.with_extension("rcl")
+    } else {
+        requested
+    }
+}
+
 fn format_errors(errors: Vec<String>) -> String {
     errors.into_iter().map(|e| format!("error: {e}")).collect::<Vec<_>>().join("\n")
+}
+
+fn format_source_error(path: &str, source: &str, span: rcl::lexer::Span, message: String) -> String {
+    let span = if span.line == 1 && span.column == 1 && span.length == 0 {
+        infer_error_span(source, &message).unwrap_or(span)
+    } else {
+        span
+    };
+    if span.line == 1 && span.column == 1 && span.length == 0 {
+        return format!("{}: {}", path, message);
+    }
+    let line_number = span.line.max(1);
+    let line = source.lines().nth(line_number.saturating_sub(1)).unwrap_or("");
+    let column = span.column.max(1);
+    let width = span.length.max(1);
+    let marker = format!("{}{}", " ".repeat(column.saturating_sub(1)), "^".repeat(width));
+    format!("{}:{}:{}: {}\n  {} | {}\n    | {}", path, line_number, column, message, line_number, line, marker)
+}
+
+fn infer_error_span(source: &str, message: &str) -> Option<rcl::lexer::Span> {
+    let quoted = message.split('\'').nth(1);
+    for (line_index, line) in source.lines().enumerate() {
+        let Some(column) = (if let Some(name) = quoted {
+            line.find(name)
+        } else if message.contains("array length mismatch") {
+            line.find('[')
+        } else if message.contains("type mismatch") {
+            line.find(':').or_else(|| line.find('='))
+        } else {
+            None
+        }) else { continue };
+        return Some(rcl::lexer::Span { line: line_index + 1, column: column + 1, length: 1 });
+    }
+    None
 }
 
 fn llvm_path(source: &str) -> PathBuf { Path::new(source).with_extension("ll") }
@@ -106,6 +196,8 @@ fn build_native(source: &str) -> Result<PathBuf, String> {
     let runtime = build_runtime()?;
     let out = executable_path(source);
 
+    let _ = fs::remove_file(&out);
+
     let status = Command::new("clang")
         .arg("-x").arg("ir").arg(&ll)
         .arg("-x").arg("none").arg(&runtime)
@@ -130,7 +222,7 @@ fn new_project(name: &str) -> Result<(), String> {
 }
 
 fn print_help() {
-    println!("Recontrol Lang compiler 0.1.0");
+    println!("Recontrol Lang compiler 0.1.1b");
     println!();
     println!("Usage:");
     println!("  rcl check <file.rcl>       Check source without producing an executable");
@@ -145,7 +237,7 @@ fn print_help() {
 fn main() {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        Some("--version") | Some("-V") => println!("recontrolc 0.1.0"),
+        Some("--version") | Some("-V") => println!("recontrolc 0.1.1b"),
         Some("--help") | Some("-h") | None => print_help(),
         Some("new") => match args.next() {
             Some(name) => { if let Err(e) = new_project(&name) { eprintln!("{e}"); std::process::exit(1); } }
@@ -175,8 +267,9 @@ fn main() {
         Some("run") => match args.next() {
             Some(path) => match build_native(&path) {
                 Ok(out) => {
-                    let status = Command::new(&out).status().unwrap_or_else(|e| {
-                        eprintln!("rcl: cannot run {}: {e}", out.display());
+                    let executable = fs::canonicalize(&out).unwrap_or(out);
+                    let status = Command::new(&executable).status().unwrap_or_else(|e| {
+                        eprintln!("rcl: cannot run {}: {e}", executable.display());
                         std::process::exit(1);
                     });
                     std::process::exit(status.code().unwrap_or(1));

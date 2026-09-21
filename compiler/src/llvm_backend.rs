@@ -1,5 +1,5 @@
 use crate::ast::{BinaryOp, Literal, UnaryOp};
-use crate::hir::{FunctionId, BUILTIN_PRINT_ID, BUILTIN_PRINTLN_ID};
+use crate::hir::{FunctionId, BUILTIN_LEN_ID, BUILTIN_PRINT_ID, BUILTIN_PRINTLN_ID, BUILTIN_TYPEOF_ID};
 use crate::mir::{MirFunction, MirProgram, MirStatement, Operand, Place, Rvalue, Terminator};
 use crate::types::Type;
 use std::collections::HashMap;
@@ -17,14 +17,21 @@ struct Cx<'a> {
     next: usize,
     strings: Vec<(String, Vec<u8>)>,
     pending: String,
+    array_lengths: HashMap<usize, usize>,
 }
 
 impl LlvmBackend {
     pub fn emit(program: &MirProgram) -> Result<String, Vec<CodegenError>> {
-        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\n\n");
+        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\ndeclare void @rcl_print_i8(i8)\ndeclare void @rcl_println_i8(i8)\ndeclare void @rcl_print_i32(i32)\ndeclare void @rcl_println_i32(i32)\ndeclare void @rcl_check_bounds_i32(i32, i32)\n\n");
         let mut strings = Vec::new();
         let mut functions = String::new();
         let mut errors = Vec::new();
+
+        for structure in &program.structs {
+            let fields = structure.fields.iter().map(|(_, ty)| llvm_type(ty)).collect::<Vec<_>>().join(", ");
+            writeln!(module, "%{} = type {{ {} }}", structure.name, fields).unwrap();
+        }
+        if !program.structs.is_empty() { module.push('\n'); }
 
         for function in &program.functions {
             let mut cx = Cx {
@@ -34,6 +41,7 @@ impl LlvmBackend {
                 next: 0,
                 strings: Vec::new(),
                 pending: String::new(),
+                array_lengths: HashMap::new(),
             };
             match cx.emit_function() {
                 Ok(text) => functions.push_str(&text),
@@ -83,10 +91,13 @@ impl<'a> Cx<'a> {
         match s {
             MirStatement::StorageLive(_) | MirStatement::StorageDead(_) => Ok(String::new()),
             MirStatement::Assign { place, rvalue } => {
-                let v = self.rvalue(rvalue)?;
-                let pending = self.take_pending();
                 let ty = self.place_type(place)?;
+                let v = self.assignment_rvalue(rvalue, &ty)?;
+                if let (Place::Local(local), Rvalue::Array(values)) = (place, rvalue) {
+                    self.array_lengths.insert(*local, values.len());
+                }
                 let p = self.place(place)?;
+                let pending = self.take_pending();
                 Ok(format!("{pending}  store {} {}, ptr {}\n", llvm_type(&ty), v, p))
             }
             MirStatement::Evaluate(rvalue) => {
@@ -153,9 +164,48 @@ impl<'a> Cx<'a> {
             Rvalue::Binary { left, op, right } => self.binary(left,*op,right),
             Rvalue::Ref { place, .. } => self.place(place),
             Rvalue::Call { callee, args } => self.call(callee,args),
-            Rvalue::Aggregate { .. } => self.err_result("struct aggregates are not yet supported"),
-            Rvalue::Array(_) => self.err_result("arrays are not yet supported"),
+            Rvalue::Aggregate { name, fields } => {
+                let Some(structure) = self.program.structs.iter().find(|structure| structure.name == *name).cloned() else {
+                    return self.err_result("unknown struct aggregate");
+                };
+                let mut value = "undef".to_string();
+                for (field_name, operand) in fields {
+                    let Some(index) = structure.fields.iter().position(|(field, _)| field == field_name) else {
+                        return self.err_result("unknown struct field");
+                    };
+                    let field_value = self.operand(operand)?;
+                    let field_type = &structure.fields[index].1;
+                    let next = self.tmp();
+                    writeln!(self.pending, "  %{next} = insertvalue %{} {}, {} {}, {}", name, value, llvm_type(field_type), field_value, index).unwrap();
+                    value = format!("%{next}");
+                }
+                Ok(value)
+            }
+            Rvalue::Array(values) => {
+                let element_type = values.first().map(|value| self.operand_type(value)).transpose()?.unwrap_or(Type::Unknown);
+                let array_type = format!("[{} x {}]", values.len(), llvm_type(&element_type));
+                let storage = self.tmp();
+                writeln!(self.pending, "  %{storage} = alloca {array_type}").unwrap();
+                let first = self.tmp();
+                writeln!(self.pending, "  %{first} = getelementptr inbounds {array_type}, ptr %{storage}, i32 0, i32 0").unwrap();
+                for (index, value) in values.iter().enumerate() {
+                    let rendered = self.operand(value)?;
+                    let slot = self.tmp();
+                    writeln!(self.pending, "  %{slot} = getelementptr inbounds {}, ptr %{first}, i32 {}", llvm_type(&element_type), index).unwrap();
+                    writeln!(self.pending, "  store {} {}, ptr %{slot}", llvm_type(&element_type), rendered).unwrap();
+                }
+                Ok(format!("%{first}"))
+            }
         }
+    }
+
+    fn assignment_rvalue(&mut self, v: &Rvalue, expected: &Type) -> Result<String, Vec<CodegenError>> {
+        if let Rvalue::Unary { op: UnaryOp::Minus, operand: Operand::Constant(Literal::Number(n)) } = v {
+            let t = self.tmp();
+            writeln!(self.pending, "  %{t} = sub {} 0, {}", llvm_type(expected), split_number(n).0).unwrap();
+            return Ok(format!("%{t}"));
+        }
+        self.rvalue(v)
     }
 
     fn binary(&mut self, l: &Operand, op: BinaryOp, r: &Operand) -> Result<String, Vec<CodegenError>> {
@@ -187,10 +237,41 @@ impl<'a> Cx<'a> {
 
     fn call(&mut self, callee: &Operand, args: &[Operand]) -> Result<String, Vec<CodegenError>> {
         let Operand::Function(id)=callee else { return self.err_result("indirect calls are not yet supported"); };
-        let (name,ret,params)=self.signature(*id)?;
-        if (*id==BUILTIN_PRINT_ID || *id==BUILTIN_PRINTLN_ID) && (args.len()!=1 || self.operand_type(&args[0])? != Type::Str) {
-            return self.err_result("print/println currently require a str argument");
+        if *id == BUILTIN_TYPEOF_ID {
+            if args.len() != 1 { return self.err_result("typeof expects one argument"); }
+            let type_name = self.operand_type(&args[0])?.display_name();
+            let bytes = type_name.as_bytes().iter().copied().chain([0]).collect::<Vec<_>>();
+            let name = self.intern_string(bytes.clone());
+            return Ok(format!("getelementptr inbounds ([{} x i8], ptr {}, i64 0, i64 0)", bytes.len(), name));
         }
+        if *id == BUILTIN_LEN_ID {
+            if args.len() != 1 { return self.err_result("len expects one argument"); }
+            let (Operand::Copy(place) | Operand::Move(place)) = &args[0] else {
+                return self.err_result("len expects an array value");
+            };
+            return Ok(self.array_length(place)?.to_string());
+        }
+        if *id == BUILTIN_PRINT_ID || *id == BUILTIN_PRINTLN_ID {
+            if args.is_empty() { return self.err_result("print/println expects at least one argument"); }
+            if args.len() == 1 {
+                if let Operand::Copy(place) | Operand::Move(place) = &args[0] {
+                    if matches!(self.operand_type(&args[0])?, Type::Array(_)) {
+                        self.emit_print_array(place, *id == BUILTIN_PRINTLN_ID)?;
+                        return Ok(String::new());
+                    }
+                }
+            }
+            if let Operand::Constant(Literal::String(format)) = &args[0] {
+                if args.len() > 1 && (format.contains('%') || format.contains("{}")) {
+                    return self.formatted_print(format, &args[1..], *id == BUILTIN_PRINTLN_ID);
+                }
+            }
+            for (index, argument) in args.iter().enumerate() {
+                self.emit_print_value(argument, *id == BUILTIN_PRINTLN_ID && index + 1 == args.len())?;
+            }
+            return Ok(String::new());
+        }
+        let (name,ret,params)=self.signature(*id)?;
         let mut rendered=Vec::new();
         for (i,a) in args.iter().enumerate() {
             let ty=params.get(i).cloned().unwrap_or(self.operand_type(a)?);
@@ -206,6 +287,95 @@ impl<'a> Cx<'a> {
             writeln!(self.pending, "  %{t} = call {} @{name}({text})",llvm_type(&ret)).unwrap();
             Ok(format!("%{t}"))
         }
+    }
+
+    fn formatted_print(&mut self, format: &str, args: &[Operand], newline: bool) -> Result<String, Vec<CodegenError>> {
+        let mut text = String::new();
+        let mut argument_index = 0;
+        let chars: Vec<char> = format.chars().collect();
+        let mut index = 0;
+        while index < chars.len() {
+            let placeholder = if chars[index] == '%' && index + 1 < chars.len() && matches!(chars[index + 1], 'd' | 'i' | 's') {
+                index += 2;
+                true
+            } else if chars[index] == '{' && index + 1 < chars.len() && chars[index + 1] == '}' {
+                index += 2;
+                true
+            } else {
+                text.push(chars[index]);
+                index += 1;
+                false
+            };
+            if placeholder {
+                self.emit_print_string(&text, false)?;
+                text.clear();
+                let Some(argument) = args.get(argument_index) else { return self.err_result("not enough arguments for format string"); };
+                self.emit_print_value(argument, false)?;
+                argument_index += 1;
+            }
+        }
+        self.emit_print_string(&text, newline)?;
+        if argument_index != args.len() { return self.err_result("too many arguments for format string"); }
+        if text.is_empty() && !newline && argument_index == 0 { self.emit_print_string("", false)?; }
+        Ok(String::new())
+    }
+
+    fn emit_print_string(&mut self, value: &str, newline: bool) -> Result<(), Vec<CodegenError>> {
+        let literal = Operand::Constant(Literal::String(value.to_string()));
+        self.emit_print_value(&literal, newline)
+    }
+
+    fn emit_print_value(&mut self, argument: &Operand, newline: bool) -> Result<(), Vec<CodegenError>> {
+        let ty = self.operand_type(argument)?;
+        let name = match (&ty, newline) {
+            (Type::Str, false) => "rcl_print",
+            (Type::Str, true) => "rcl_println",
+            (Type::I8, false) => "rcl_print_i8",
+            (Type::I8, true) => "rcl_println_i8",
+            (Type::I32, false) => "rcl_print_i32",
+            (Type::I32, true) => "rcl_println_i32",
+            _ => return self.err_result("print/println supports str, i8, and i32 values"),
+        };
+        let value = self.operand(argument)?;
+        writeln!(self.pending, "  call void @{name}({} {value})", llvm_type(&ty)).unwrap();
+        Ok(())
+    }
+
+    fn emit_print_array(&mut self, place: &Place, newline: bool) -> Result<(), Vec<CodegenError>> {
+        let Type::Array(element_type) = self.place_type(place)? else {
+            return self.err_result("print array expects an array value");
+        };
+        let length = self.array_length(place)?;
+        let source = self.place(place)?;
+        let base = self.tmp();
+        writeln!(self.pending, "  %{base} = load ptr, ptr {source}").unwrap();
+        for index in 0..length {
+            if index > 0 { self.emit_print_string(" ", false)?; }
+            let slot = self.tmp();
+            writeln!(self.pending, "  %{slot} = getelementptr inbounds {}, ptr %{base}, i32 {}", llvm_type(&element_type), index).unwrap();
+            let value = self.tmp();
+            writeln!(self.pending, "  %{value} = load {}, ptr %{slot}", llvm_type(&element_type)).unwrap();
+            self.emit_print_typed_value(&element_type, &format!("%{value}"), false)?;
+        }
+        if newline {
+            self.emit_print_string("", true)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn emit_print_typed_value(&mut self, ty: &Type, value: &str, newline: bool) -> Result<(), Vec<CodegenError>> {
+        let name = match (ty, newline) {
+            (Type::Str, false) => "rcl_print",
+            (Type::Str, true) => "rcl_println",
+            (Type::I8, false) => "rcl_print_i8",
+            (Type::I8, true) => "rcl_println_i8",
+            (Type::I32, false) => "rcl_print_i32",
+            (Type::I32, true) => "rcl_println_i32",
+            _ => return self.err_result("array printing supports str, i8, and i32 elements"),
+        };
+        writeln!(self.pending, "  call void @{name}({} {value})", llvm_type(ty)).unwrap();
+        Ok(())
     }
 
     fn operand(&mut self, o: &Operand) -> Result<String, Vec<CodegenError>> {
@@ -235,12 +405,82 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn place(&self,p:&Place)->Result<String,Vec<CodegenError>> {
-        match p { Place::Local(id)=>Ok(format!("%l{id}")), _=>self.err_result("field/index places are not yet supported") }
+    fn place(&mut self,p:&Place)->Result<String,Vec<CodegenError>> {
+        match p {
+            Place::Local(id) => Ok(format!("%l{id}")),
+            Place::Field { base, name } => {
+                let base_type = self.place_type(base)?;
+                let (struct_name, base_pointer) = match base_type {
+                    Type::Named(struct_name) => (struct_name, self.place(base)?),
+                    Type::Reference { inner, .. } => {
+                        let Type::Named(struct_name) = *inner else { return self.err_result("field base is not a struct"); };
+                        let source = self.place(base)?;
+                        let temp = self.tmp();
+                        writeln!(self.pending, "  %{temp} = load ptr, ptr {source}").unwrap();
+                        (struct_name, format!("%{temp}"))
+                    }
+                    _ => return self.err_result("field base is not a struct"),
+                };
+                let Some(structure) = self.program.structs.iter().find(|structure| structure.name == struct_name).cloned() else {
+                    return self.err_result("unknown struct type");
+                };
+                let Some(index) = structure.fields.iter().position(|(field, _)| field == name) else {
+                    return self.err_result("unknown struct field");
+                };
+                let temp = self.tmp();
+                writeln!(self.pending, "  %{temp} = getelementptr inbounds %{}, ptr {}, i32 0, i32 {}", struct_name, base_pointer, index).unwrap();
+                Ok(format!("%{temp}"))
+            }
+            Place::Index { base, index } => {
+                let element_type = self.place_type(p)?;
+                let base_place = self.place(base)?;
+                let base_pointer = self.tmp();
+                writeln!(self.pending, "  %{base_pointer} = load ptr, ptr {base_place}").unwrap();
+                let index_value = self.operand(index)?;
+                let index_type = self.operand_type(index)?;
+                let index_i32 = if index_type == Type::I32 {
+                    index_value.clone()
+                } else {
+                    let converted = self.tmp();
+                    let instruction = if unsigned(&index_type) { "zext" } else { "sext" };
+                    writeln!(self.pending, "  %{converted} = {instruction} {} {index_value} to i32", llvm_type(&index_type)).unwrap();
+                    format!("%{converted}")
+                };
+                let length = self.array_length(base)?;
+                writeln!(self.pending, "  call void @rcl_check_bounds_i32(i32 {index_i32}, i32 {length})").unwrap();
+                let slot = self.tmp();
+                writeln!(self.pending, "  %{slot} = getelementptr inbounds {}, ptr %{base_pointer}, i32 {index_i32}", llvm_type(&element_type)).unwrap();
+                Ok(format!("%{slot}"))
+            }
+        }
+    }
+
+    fn array_length(&self, place: &Place) -> Result<usize, Vec<CodegenError>> {
+        match place {
+            Place::Local(local) => self.array_lengths.get(local).copied().ok_or_else(|| vec![self.err("array length is unavailable")]),
+            _ => Err(vec![self.err("array length is unavailable for this expression")]),
+        }
     }
 
     fn place_type(&self,p:&Place)->Result<Type,Vec<CodegenError>> {
-        match p { Place::Local(id)=>self.locals.get(id).cloned().ok_or_else(||vec![self.err("unknown local")]), _=>self.err_result("field/index type unsupported") }
+        match p {
+            Place::Local(id) => self.locals.get(id).cloned().ok_or_else(||vec![self.err("unknown local")]),
+            Place::Field { base, name } => {
+                let base_type = self.place_type(base)?;
+                let type_name = match base_type {
+                    Type::Named(name) => name,
+                    Type::Reference { inner, .. } => match *inner { Type::Named(name) => name, _ => return self.err_result("field base is not a struct") },
+                    _ => return self.err_result("field base is not a struct"),
+                };
+                self.program.structs.iter().find(|structure| structure.name == type_name)
+                    .and_then(|structure| structure.fields.iter().find(|(field, _)| field == name).map(|(_, ty)| ty.clone()))
+                    .ok_or_else(|| vec![self.err("unknown struct field")])
+            }
+            Place::Index { base, .. } => match self.place_type(base)? {
+                Type::Array(inner) => Ok(*inner),
+                _ => self.err_result("index base is not an array"),
+            },
+        }
     }
 
     fn operand_type(&self,o:&Operand)->Result<Type,Vec<CodegenError>> {
@@ -256,6 +496,7 @@ impl<'a> Cx<'a> {
     fn signature(&self,id:FunctionId)->Result<(String,Type,Vec<Type>),Vec<CodegenError>> {
         if id==BUILTIN_PRINTLN_ID { return Ok(("rcl_println".into(),Type::Unit,vec![Type::Str])); }
         if id==BUILTIN_PRINT_ID { return Ok(("rcl_print".into(),Type::Unit,vec![Type::Str])); }
+        if id==BUILTIN_TYPEOF_ID { return Ok(("rcl_typeof".into(),Type::Str,vec![Type::Unknown])); }
         let f=self.program.functions.get(id).ok_or_else(||vec![self.err("invalid function ID")])?;
         Ok((llvm_name(&f.name),self.return_type_of(f),f.locals.iter().take(f.param_count).map(|l|l.ty.clone()).collect()))
     }
@@ -326,7 +567,7 @@ fn llvm_type(t:&Type)->String { match t {
     Type::I8|Type::U8=>"i8", Type::I16|Type::U16=>"i16", Type::I32|Type::U32|Type::Char=>"i32",
     Type::I64|Type::U64=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
     Type::F32=>"float",Type::F64=>"double",Type::F128=>"fp128",Type::Bool=>"i1",Type::Str|Type::Reference{..}=>"ptr",
-    Type::Unit=>"void",Type::Named(n)=>return format!("%\"{}\" ",n).trim_end().to_string(),Type::Array(_)|Type::Unknown=>"ptr"
+    Type::Unit=>"void",Type::Named(n)=>return format!("%{}",n),Type::Array(_)|Type::Unknown=>"ptr"
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }
@@ -446,5 +687,34 @@ fn main() {
         assert!(llvm.contains("Hello"));
         assert!(llvm.contains("define i32 @main()"));
         assert!(llvm.contains("ret i32 0"));
+    }
+
+    #[test]
+    fn emits_numeric_prints_and_multiple_arguments() {
+        let source = r#"fn main(){let x:i32=5 println(typeof(x), x)}"#;
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("call void @rcl_print(") || llvm.contains("call void @rcl_println("));
+        assert!(llvm.contains("call void @rcl_println_i32"));
+    }
+
+    #[test]
+    fn emits_array_literal_and_index() {
+        let source = r#"fn main(){let values=[10,20,30] println(values[1])}"#;
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        SemanticAnalyzer::check(&program).unwrap();
+        let hir = HirLowerer::lower(&program);
+        let mut mir = MirLowerer::lower(&hir);
+        MirOptimizer::optimize(&mut mir);
+        let llvm = LlvmBackend::emit(&mir).unwrap();
+        assert!(llvm.contains("alloca [3 x i32]"));
+        assert!(llvm.contains("getelementptr inbounds i32"));
+        assert!(llvm.contains("call void @rcl_println_i32"));
     }
 }

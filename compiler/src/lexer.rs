@@ -14,7 +14,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Fn, Struct, Impl, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus,
@@ -113,7 +113,7 @@ impl<'a> Lexer<'a> {
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
             "let" => TokenKind::Let, "mut" => TokenKind::Mut, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
-            "impl" => TokenKind::Impl, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
+            "impl" => TokenKind::Impl, "use" => TokenKind::Use, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
             "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
         };
@@ -137,7 +137,21 @@ impl<'a> Lexer<'a> {
             if self.peek() == '\n' {
                 return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
             }
-            text.push(self.advance());
+            if self.peek() == '\\' {
+                self.advance();
+                if self.is_at_end() { break; }
+                let escaped = match self.advance() {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '\\' => '\\',
+                    '"' => '"',
+                    other => other,
+                };
+                text.push(escaped);
+            } else {
+                text.push(self.advance());
+            }
         }
         if self.is_at_end() {
             return Err(LexError { message: "unterminated string literal".into(), span: Span::new(line, column, self.column.saturating_sub(column)) });
@@ -193,5 +207,11 @@ mod tests {
     fn reports_unterminated_string() {
         let errors = Lexer::new("let x = \"hello").tokenize().unwrap_err();
         assert_eq!(errors[0].message, "unterminated string literal");
+    }
+
+    #[test]
+    fn decodes_string_escapes() {
+        let tokens = Lexer::new(r#"println("line 1\nline 2\t\\")"#).tokenize().unwrap();
+        assert_eq!(tokens[2].lexeme, "line 1\nline 2\t\\");
     }
 }
