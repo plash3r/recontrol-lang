@@ -37,6 +37,7 @@ pub struct ImplBlock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    pub public: bool,
     pub name: String,
     pub params: Vec<Parameter>,
     pub return_type: Option<TypeRef>,
@@ -53,6 +54,7 @@ pub struct Parameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
+    pub public: bool,
     pub name: String,
     pub fields: Vec<Field>,
     pub span: Span,
@@ -60,6 +62,7 @@ pub struct StructDef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
+    pub public: bool,
     pub name: String,
     pub ty: TypeRef,
     pub span: Span,
