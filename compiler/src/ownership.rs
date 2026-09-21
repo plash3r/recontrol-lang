@@ -217,12 +217,16 @@ impl OwnershipChecker {
                 self.expr(right, env, false);
                 self.expr_type(left, env)
             }
-            ExprKind::Assignment { target, value, .. } => {
-                if let Some(name) = self.root_identifier(target) {
-                    self.ensure_available(&name, env, target.span);
-                }
+            ExprKind::Assignment { target, op, value } => {
                 let value_ty = self.expr(value, env, true);
-                self.expr(target, env, false);
+
+                let direct_reinitialization =
+                    *op == AssignOp::Assign && matches!(target.kind, ExprKind::Identifier(_));
+
+                if !direct_reinitialization {
+                    self.expr(target, env, false);
+                }
+
                 if let Some(name) = self.root_identifier(target) {
                     if let Some(state) = env.get_mut(&name) {
                         state.moved = false;
