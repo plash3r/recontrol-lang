@@ -94,6 +94,7 @@ pub struct SemanticAnalyzer {
     methods: HashMap<(usize, String, String), FunctionSig>,
     imports: HashMap<usize, Vec<ImportInfo>>,
     errors: Vec<SemanticError>,
+    loop_depth: usize,
 }
 
 impl SemanticAnalyzer {
@@ -105,6 +106,7 @@ impl SemanticAnalyzer {
             methods: HashMap::new(),
             imports: HashMap::new(),
             errors: Vec::new(),
+            loop_depth: 0,
         };
         analyzer.collect(program);
         analyzer.check_items(program);
@@ -279,6 +281,7 @@ impl SemanticAnalyzer {
             self.functions.get(&(source_id, function.name.clone())).cloned()
         };
         let Some(signature) = signature else { return };
+        self.loop_depth = 0;
 
         let mut env = Env::default();
         env.push();
@@ -351,6 +354,16 @@ impl SemanticAnalyzer {
                     );
                 }
             }
+            StmtKind::Break => {
+                if self.loop_depth == 0 {
+                    self.error_at(statement.span, "break is only valid inside a loop");
+                }
+            }
+            StmtKind::Continue => {
+                if self.loop_depth == 0 {
+                    self.error_at(statement.span, "continue is only valid inside a loop");
+                }
+            }
             StmtKind::If { condition, then_branch, else_branch } => {
                 let ty = self.expr(condition, env);
                 if ty != Type::Bool {
@@ -366,10 +379,14 @@ impl SemanticAnalyzer {
                 if ty != Type::Bool {
                     self.error_at(condition.span, format!("while condition must be bool, found {}", ty.display_name()));
                 }
+                self.loop_depth += 1;
                 self.check_block(body, env, return_type);
+                self.loop_depth -= 1;
             }
             StmtKind::DoWhile { body, condition } => {
+                self.loop_depth += 1;
                 self.check_block(body, env, return_type);
+                self.loop_depth -= 1;
                 let ty = self.expr(condition, env);
                 if ty != Type::Bool {
                     self.error_at(condition.span, format!("do while condition must be bool, found {}", ty.display_name()));
@@ -389,7 +406,9 @@ impl SemanticAnalyzer {
                 if let Some(update) = update {
                     self.expr(update, env);
                 }
+                self.loop_depth += 1;
                 self.check_block(body, env, return_type);
+                self.loop_depth -= 1;
                 env.pop();
             }
             StmtKind::Match { value, arms } => {
@@ -1190,6 +1209,14 @@ mod tests {
         items.extend(left.items);
         items.extend(right.items);
         assert!(SemanticAnalyzer::check(&Program { items }).is_ok());
+    }
+
+    #[test]
+    fn break_and_continue_require_loop_context() {
+        assert!(check("fn main(){while true { continue break }}").is_ok());
+        let errors = check("fn main(){break continue}").unwrap_err();
+        assert!(errors.iter().any(|error| error.message.contains("break is only valid inside a loop")));
+        assert!(errors.iter().any(|error| error.message.contains("continue is only valid inside a loop")));
     }
 
     #[test]
