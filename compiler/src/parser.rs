@@ -201,7 +201,22 @@ impl Parser {
         let mut variants = Vec::new();
         while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
             let variant = self.expect_identifier_token("expected enum variant")?;
-            variants.push(EnumVariant { name: variant.lexeme, span: variant.span });
+            let mut payload = Vec::new();
+            let mut variant_span = variant.span;
+            if self.match_kind(TokenKind::LeftParen) {
+                self.skip_newlines();
+                if !self.check(TokenKind::RightParen) {
+                    loop {
+                        payload.push(self.parse_type()?);
+                        self.skip_newlines();
+                        if !self.match_kind(TokenKind::Comma) { break; }
+                        self.skip_newlines();
+                    }
+                }
+                let end = self.expect(TokenKind::RightParen, "expected ) after enum payload types")?.span;
+                variant_span = variant_span.join(end);
+            }
+            variants.push(EnumVariant { name: variant.lexeme, payload, span: variant_span });
 
             if self.match_kind(TokenKind::Comma) {
                 self.skip_newlines();
@@ -357,6 +372,19 @@ impl Parser {
             let enum_name = self.expect_identifier_token("expected enum name in match pattern")?;
             self.expect(TokenKind::Dot, "expected . in enum match pattern")?;
             let variant = self.expect_identifier_token("expected enum variant in match pattern")?;
+            let mut bindings = Vec::new();
+            if self.match_kind(TokenKind::LeftParen) {
+                self.skip_newlines();
+                if !self.check(TokenKind::RightParen) {
+                    loop {
+                        bindings.push(self.expect_identifier_token("expected payload binding")?.lexeme);
+                        self.skip_newlines();
+                        if !self.match_kind(TokenKind::Comma) { break; }
+                        self.skip_newlines();
+                    }
+                }
+                self.expect(TokenKind::RightParen, "expected ) after match payload bindings")?;
+            }
             self.expect(TokenKind::FatArrow, "expected => after match pattern")?;
             self.skip_newlines();
             let body = self.parse_block()?;
@@ -364,6 +392,7 @@ impl Parser {
             arms.push(MatchArm {
                 enum_name: enum_name.lexeme,
                 variant: variant.lexeme,
+                bindings,
                 body,
                 span,
             });
@@ -781,6 +810,27 @@ mod tests {
             Item::Function(function) => {
                 assert!(matches!(function.body.statements[1].kind, StmtKind::Match { .. }));
             }
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parses_payload_enum_and_match_binding() {
+        let program = parse(
+            "enum Maybe { None, Some(i32) }\nfn main(){let value:Maybe=Maybe.Some(42)\nmatch value { Maybe.None => {} Maybe.Some(inner) => { println(inner) } }}",
+        );
+        match &program.items[0] {
+            Item::Enum(definition) => {
+                assert!(definition.variants[0].payload.is_empty());
+                assert_eq!(definition.variants[1].payload[0].name, "i32");
+            }
+            _ => panic!("expected enum"),
+        }
+        match &program.items[1] {
+            Item::Function(function) => match &function.body.statements[1].kind {
+                StmtKind::Match { arms, .. } => assert_eq!(arms[1].bindings, vec!["inner"]),
+                _ => panic!("expected match"),
+            },
             _ => panic!("expected function"),
         }
     }
