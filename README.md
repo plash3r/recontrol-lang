@@ -174,6 +174,20 @@ pub fn add(a: i32, b: i32): i32 {
 
 Imports are resolved relative to the file containing the `use` declaration. Cyclic imports, missing files, and cross-file access to private declarations are reported as compiler errors with source locations.
 
+An import can be placed in a namespace:
+
+~~~rcl
+use "left.rcl" as left
+use "right.rcl" as right
+
+fn main() {
+    println(left.value())
+    println(right.value())
+}
+~~~
+
+Namespaced imports do not inject their functions into the importing file's unqualified function namespace. This allows different modules to export functions with the same name. Plain `use "math.rcl"` remains available for unqualified imports.
+
 ## Compiler pipeline
 
 RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> clang/LLVM -> native executable.
