@@ -1,0 +1,7 @@
+fn helper(): i32 {
+    return 20
+}
+
+pub fn value(): i32 {
+    return helper() + 2
+}
