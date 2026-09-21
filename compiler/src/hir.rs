@@ -9,6 +9,8 @@ pub type ExprId = usize;
 // Reserved IDs are outside the range of real user functions.
 pub const BUILTIN_PRINTLN_ID: FunctionId = usize::MAX;
 pub const BUILTIN_PRINT_ID: FunctionId = usize::MAX - 1;
+pub const BUILTIN_TYPEOF_ID: FunctionId = usize::MAX - 2;
+pub const BUILTIN_LEN_ID: FunctionId = usize::MAX - 3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirProgram {
@@ -99,8 +101,10 @@ pub struct HirLowerer {
     functions: Vec<HirFunction>,
     structs: Vec<HirStruct>,
     scopes: Vec<HashMap<String, LocalId>>,
+    local_types: HashMap<LocalId, Type>,
     function_ids: HashMap<String, FunctionId>,
     function_returns: HashMap<FunctionId, Type>,
+    method_ids: HashMap<(String, String), FunctionId>,
 }
 
 impl HirLowerer {
@@ -111,8 +115,10 @@ impl HirLowerer {
             functions: Vec::new(),
             structs: Vec::new(),
             scopes: Vec::new(),
+            local_types: HashMap::new(),
             function_ids: HashMap::new(),
             function_returns: HashMap::new(),
+            method_ids: HashMap::new(),
         };
 
         for item in &program.items {
@@ -128,6 +134,7 @@ impl HirLowerer {
                         let id = lowerer.next_function;
                         lowerer.function_ids.insert(f.name.clone(), id);
                         lowerer.function_returns.insert(id, f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit));
+                        lowerer.method_ids.insert((i.type_name.clone(), f.name.clone()), id);
                         lowerer.next_function += 1;
                     }
                 }
@@ -145,12 +152,13 @@ impl HirLowerer {
                         ty: Type::from_ref(&f.ty),
                     }).collect(),
                 }),
-                ast::Item::Function(f) => lowerer.lower_function(f),
+                ast::Item::Function(f) => lowerer.lower_function(f, None),
                 ast::Item::Impl(i) => {
                     for f in &i.methods {
-                        lowerer.lower_function(f);
+                        lowerer.lower_function(f, Some(&i.type_name));
                     }
                 }
+                ast::Item::Import(_) => {}
             }
         }
 
@@ -160,7 +168,7 @@ impl HirLowerer {
         }
     }
 
-    fn lower_function(&mut self, function: &ast::Function) {
+    fn lower_function(&mut self, function: &ast::Function, impl_type: Option<&str>) {
         let id = self.next_function;
         self.next_function += 1;
         let mut locals = Vec::new();
@@ -169,8 +177,16 @@ impl HirLowerer {
 
         for parameter in &function.params {
             let local = self.new_local();
-            let ty = Type::from_ref(&parameter.ty);
+            let ty = if parameter.name == "self" {
+                Type::Reference {
+                    mutable: parameter.ty.reference == ast::ReferenceKind::Mutable,
+                    inner: Box::new(Type::Named(impl_type.unwrap_or("Self").to_string())),
+                }
+            } else {
+                Type::from_ref(&parameter.ty)
+            };
             self.scopes.last_mut().unwrap().insert(parameter.name.clone(), local);
+            self.local_types.insert(local, ty.clone());
             locals.push(HirLocal {
                 id: local,
                 name: parameter.name.clone(),
@@ -221,6 +237,7 @@ impl HirLowerer {
                 let inferred = initializer_hir.as_ref().map(|e| e.ty.clone());
                 let local_ty = ty.as_ref().map(Type::from_ref).or(inferred).unwrap_or(Type::Unknown);
                 locals.push(HirLocal { id: local, name: name.clone(), ty: local_ty, mutable: *mutable });
+                self.local_types.insert(local, locals.last().unwrap().ty.clone());
                 self.scopes.last_mut().unwrap().insert(name.clone(), local);
                 HirStmt::Let {
                     local,
@@ -260,10 +277,16 @@ impl HirLowerer {
                     HirExpr { ty: Type::Unit, kind: HirExprKind::Function(BUILTIN_PRINTLN_ID) }
                 } else if name == "print" {
                     HirExpr { ty: Type::Unit, kind: HirExprKind::Function(BUILTIN_PRINT_ID) }
+                } else if name == "typeof" {
+                    HirExpr { ty: Type::Str, kind: HirExprKind::Function(BUILTIN_TYPEOF_ID) }
+                } else if name == "len" {
+                    HirExpr { ty: Type::I32, kind: HirExprKind::Function(BUILTIN_LEN_ID) }
                 } else if let Some(id) = self.function_ids.get(name).copied() {
                     HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }
                 } else {
-                    HirExpr { ty: Type::Unknown, kind: HirExprKind::Local(self.local_id(name)) }
+                    let local = self.local_id(name);
+                    let ty = self.local_types.get(&local).cloned().unwrap_or(Type::Unknown);
+                    HirExpr { ty, kind: HirExprKind::Local(local) }
                 }
             },
             ast::Expr::Unary { op, expr } => {
@@ -291,9 +314,29 @@ impl HirLowerer {
                 HirExpr { ty: target.ty.clone(), kind: HirExprKind::Assignment { target: Box::new(target), op: *op, value: Box::new(value) } }
             }
             ast::Expr::Call { callee, args } => {
-                let callee = self.lower_expr(callee);
-                let args: Vec<_> = args.iter().map(|a| self.lower_expr(a)).collect();
+                let (callee, args) = if let ast::Expr::Member { object, name } = callee.as_ref() {
+                    let object = self.lower_expr(object);
+                    if let Type::Named(type_name) = &object.ty {
+                        if let Some(id) = self.method_ids.get(&(type_name.clone(), name.clone())).copied() {
+                            let self_ref = HirExpr {
+                                ty: Type::Reference { mutable: false, inner: Box::new(object.ty.clone()) },
+                                kind: HirExprKind::Unary { op: UnaryOp::BorrowShared, expr: Box::new(object) },
+                            };
+                            let mut method_args = vec![self_ref];
+                            method_args.extend(args.iter().map(|a| self.lower_expr(a)));
+                            (HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }, method_args)
+                        } else {
+                            (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                        }
+                    } else {
+                        (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                    }
+                } else {
+                    (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                };
                 let ty = match &callee.kind {
+                    HirExprKind::Function(id) if *id == BUILTIN_TYPEOF_ID => Type::Str,
+                    HirExprKind::Function(id) if *id == BUILTIN_LEN_ID => Type::I32,
                     HirExprKind::Function(id) => self.function_returns.get(id).cloned().unwrap_or(Type::Unit),
                     _ => Type::Unknown,
                 };
@@ -301,7 +344,19 @@ impl HirLowerer {
             }
             ast::Expr::Member { object, name } => {
                 let object = self.lower_expr(object);
-                HirExpr { ty: Type::Unknown, kind: HirExprKind::Member { object: Box::new(object), name: name.clone() } }
+                let ty = match &object.ty {
+                    Type::Named(type_name) => self.structs.iter().find(|structure| &structure.name == type_name)
+                        .and_then(|structure| structure.fields.iter().find(|field| field.name == *name).map(|field| field.ty.clone()))
+                        .unwrap_or(Type::Unknown),
+                    Type::Reference { inner, .. } => match inner.as_ref() {
+                        Type::Named(type_name) => self.structs.iter().find(|structure| &structure.name == type_name)
+                            .and_then(|structure| structure.fields.iter().find(|field| field.name == *name).map(|field| field.ty.clone()))
+                            .unwrap_or(Type::Unknown),
+                        _ => Type::Unknown,
+                    },
+                    _ => Type::Unknown,
+                };
+                HirExpr { ty, kind: HirExprKind::Member { object: Box::new(object), name: name.clone() } }
             }
             ast::Expr::Postfix { expr, op } => {
                 let expr = self.lower_expr(expr);

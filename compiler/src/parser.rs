@@ -21,9 +21,16 @@ impl Parser {
         self.skip_newlines();
 
         while !self.check(TokenKind::Eof) {
+            let start = self.current;
             match self.parse_item() {
                 Ok(item) => items.push(item),
-                Err(error) => { errors.push(error); self.synchronize(); }
+                Err(error) => {
+                    errors.push(error);
+                    break;
+                }
+            }
+            if self.current == start && !self.check(TokenKind::Eof) {
+                self.advance();
             }
             self.skip_newlines();
         }
@@ -36,8 +43,19 @@ impl Parser {
             TokenKind::Fn => self.parse_function().map(Item::Function),
             TokenKind::Struct => self.parse_struct().map(Item::Struct),
             TokenKind::Impl => self.parse_impl().map(Item::Impl),
-            _ => Err(self.error_here("expected fn or struct")),
+            TokenKind::Use => self.parse_import(),
+            _ => Err(self.error_here("expected use, fn, struct, or impl")),
         }
+    }
+
+    fn parse_import(&mut self) -> Result<Item, ParseError> {
+        self.expect(TokenKind::Use, "expected use")?;
+        let path = if self.check(TokenKind::String) {
+            self.advance().lexeme.clone()
+        } else {
+            return Err(self.error_here("expected string path after use"));
+        };
+        Ok(Item::Import(path))
     }
 
     fn parse_impl(&mut self) -> Result<ImplBlock, ParseError> {
@@ -77,7 +95,7 @@ impl Parser {
                         ReferenceKind::Value
                     };
                     let param_name = self.expect_identifier("expected receiver name")?;
-                    let ty = TypeRef { name: "Self".into(), reference };
+                    let ty = TypeRef { name: "Self".into(), reference, array_len: None };
                     params.push(Parameter { name: param_name, ty });
                 } else {
                     let param_name = self.expect_identifier("expected parameter name")?;
@@ -255,7 +273,16 @@ impl Parser {
         } else {
             ReferenceKind::Value
         };
-        Ok(TypeRef { name: self.expect_identifier("expected type name")?, reference })
+        let name = self.expect_identifier("expected type name")?;
+        let array_len = if self.match_kind(TokenKind::LeftBracket) {
+            let length = self.expect(TokenKind::Number, "expected array length")?.lexeme.parse::<usize>()
+                .map_err(|_| self.error_here("array length must be a non-negative integer"))?;
+            self.expect(TokenKind::RightBracket, "expected ] after array length")?;
+            Some(length)
+        } else {
+            None
+        };
+        Ok(TypeRef { name, reference, array_len })
     }
 
     fn parse_expression(&mut self) -> Result<Expr, ParseError> { self.parse_assignment() }
@@ -466,7 +493,11 @@ impl Parser {
                 self.skip_newlines();
                 return;
             }
-            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::RightBrace) { return; }
+            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::Impl | TokenKind::Use) { return; }
+            if self.check(TokenKind::RightBrace) {
+                self.advance();
+                return;
+            }
             self.advance();
         }
     }
