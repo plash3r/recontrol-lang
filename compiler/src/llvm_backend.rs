@@ -576,7 +576,7 @@ impl<'a> Cx<'a> {
         let mut n="@.str.".to_string(); for b in &bytes { write!(n,"{:02X}",b).unwrap(); } self.strings.push((n.clone(),bytes)); n
     }
 
-    fn tmp(&mut self)->usize { let n=self.next; self.next+=1; n }
+    fn tmp(&mut self)->String { let n=self.next; self.next+=1; format!("tmp{n}") }
     fn take_pending(&mut self)->String { std::mem::take(&mut self.pending) }
     fn err(&self,msg:&str)->CodegenError { CodegenError{function:self.function.name.clone(),message:msg.into()} }
     fn err_result<T>(&self,msg:&str)->Result<T,Vec<CodegenError>> { Err(vec![self.err(msg)]) }
