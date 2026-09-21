@@ -273,6 +273,7 @@ impl BorrowChecker {
                 self.check_expression(condition, env);
                 self.check_block_body(body, env);
             }
+            StmtKind::Loop { body } => self.check_block_body(body, env),
             StmtKind::DoWhile { body, condition } => {
                 self.check_block_body(body, env);
                 self.check_expression(condition, env);
