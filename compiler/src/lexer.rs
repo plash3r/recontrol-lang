@@ -53,10 +53,10 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Pub, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Pub, Fn, Struct, Enum, Match, Impl, Use, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
-    AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus,
+    AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus, FatArrow,
     LeftParen, RightParen, LeftBrace, RightBrace,
     LeftBracket, RightBracket, Colon, Comma, Dot, Semicolon,
     Newline, Eof,
@@ -123,6 +123,7 @@ impl<'a> Lexer<'a> {
                 '+' if self.match_char('+') => tokens.push(self.token(TokenKind::PlusPlus, "++", line, column, 2)),
                 '-' if self.match_char('-') => tokens.push(self.token(TokenKind::MinusMinus, "--", line, column, 2)),
                 '=' if self.match_char('=') => tokens.push(self.token(TokenKind::EqualEqual, "==", line, column, 2)),
+                '=' if self.match_char('>') => tokens.push(self.token(TokenKind::FatArrow, "=>", line, column, 2)),
                 '+' if self.match_char('=') => tokens.push(self.token(TokenKind::PlusEqual, "+=", line, column, 2)),
                 '-' if self.match_char('=') => tokens.push(self.token(TokenKind::MinusEqual, "-=", line, column, 2)),
                 '*' if self.match_char('=') => tokens.push(self.token(TokenKind::StarEqual, "*=", line, column, 2)),
@@ -166,6 +167,7 @@ impl<'a> Lexer<'a> {
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
             "let" => TokenKind::Let, "mut" => TokenKind::Mut, "pub" => TokenKind::Pub, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
+            "enum" => TokenKind::Enum, "match" => TokenKind::Match,
             "impl" => TokenKind::Impl, "use" => TokenKind::Use, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
             "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
