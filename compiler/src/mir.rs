@@ -14,7 +14,13 @@ pub struct MirProgram {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirEnum {
     pub name: String,
-    pub variants: Vec<String>,
+    pub variants: Vec<MirEnumVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirEnumVariant {
+    pub name: String,
+    pub payload: Vec<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,8 +74,9 @@ pub enum Rvalue {
     Ref { mutable: bool, place: Place },
     Call { callee: Operand, args: Vec<Operand> },
     Aggregate { name: String, fields: Vec<(String, Operand)> },
-    EnumVariant { name: String, discriminant: usize },
+    EnumVariant { name: String, discriminant: usize, values: Vec<Operand> },
     EnumTag { operand: Operand },
+    EnumPayload { operand: Operand, discriminant: usize, field_index: usize },
     Array(Vec<Operand>),
 }
 
@@ -141,7 +148,10 @@ impl MirLowerer {
             }).collect(),
             enums: program.enums.iter().map(|definition| MirEnum {
                 name: definition.name.clone(),
-                variants: definition.variants.clone(),
+                variants: definition.variants.iter().map(|variant| MirEnumVariant {
+                    name: variant.name.clone(),
+                    payload: variant.payload.clone(),
+                }).collect(),
             }).collect(),
         }
     }
@@ -287,8 +297,12 @@ impl MirLowerer {
                 for (_, op) in fields { result.extend(Self::operand_locals(op)); }
                 result
             }
-            Rvalue::EnumVariant { .. } => std::collections::HashSet::new(),
-            Rvalue::EnumTag { operand } => Self::operand_locals(operand),
+            Rvalue::EnumVariant { values, .. } => {
+                let mut result = std::collections::HashSet::new();
+                for operand in values { result.extend(Self::operand_locals(operand)); }
+                result
+            }
+            Rvalue::EnumTag { operand } | Rvalue::EnumPayload { operand, .. } => Self::operand_locals(operand),
             Rvalue::Array(values) => {
                 let mut result = std::collections::HashSet::new();
                 for op in values { result.extend(Self::operand_locals(op)); }
@@ -528,9 +542,10 @@ impl MirLowerer {
                 base: Box::new(Self::lower_place(builder, locals, object)),
                 index: Box::new(Self::lower_operand(builder, locals, index)),
             })),
-            HirExprKind::EnumVariant { name, discriminant } => Rvalue::EnumVariant {
+            HirExprKind::EnumVariant { name, discriminant, values } => Rvalue::EnumVariant {
                 name: name.clone(),
                 discriminant: *discriminant,
+                values: values.iter().map(|value| Self::lower_operand(builder, locals, value)).collect(),
             },
             HirExprKind::Function(id) => Rvalue::Use(Operand::Function(*id)),
         }
@@ -639,12 +654,19 @@ impl MirLowerer {
                 builder.switch_to(exit);
             }
             HirStmt::Match { value, arms } => {
-                let value = Self::lower_operand(builder, locals, value);
+                let scrutinee = Self::new_temp(locals, value.ty.clone());
+                builder.statement(MirStatement::StorageLive(scrutinee));
+                let scrutinee_value = Self::lower_rvalue(builder, locals, value);
+                builder.statement(MirStatement::Assign {
+                    place: Place::Local(scrutinee),
+                    rvalue: scrutinee_value,
+                });
+
                 let tag = Self::new_temp(locals, Type::I32);
                 builder.statement(MirStatement::StorageLive(tag));
                 builder.statement(MirStatement::Assign {
                     place: Place::Local(tag),
-                    rvalue: Rvalue::EnumTag { operand: value },
+                    rvalue: Rvalue::EnumTag { operand: Operand::Copy(Place::Local(scrutinee)) },
                 });
 
                 let join = builder.new_block();
@@ -668,6 +690,17 @@ impl MirLowerer {
                     });
 
                     builder.switch_to(arm_block);
+                    for binding in &arm.bindings {
+                        builder.statement(MirStatement::StorageLive(binding.local));
+                        builder.statement(MirStatement::Assign {
+                            place: Place::Local(binding.local),
+                            rvalue: Rvalue::EnumPayload {
+                                operand: Operand::Copy(Place::Local(scrutinee)),
+                                discriminant: arm.discriminant,
+                                field_index: binding.field_index,
+                            },
+                        });
+                    }
                     Self::lower_block(builder, &arm.body, locals);
                     if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                         builder.finish_block(Terminator::Goto(join));
