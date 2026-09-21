@@ -36,11 +36,11 @@ impl Env {
     }
 
     fn get(&self, name: &str) -> Option<&VarState> {
-        self.scopes.iter().rev().find_map(|s| s.get(name))
+        self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 
     fn get_mut(&mut self, name: &str) -> Option<&mut VarState> {
-        self.scopes.iter_mut().rev().find_map(|s| s.get_mut(name))
+        self.scopes.iter_mut().rev().find_map(|scope| scope.get_mut(name))
     }
 }
 
@@ -61,166 +61,165 @@ impl OwnershipChecker {
 
         for item in &program.items {
             match item {
-                Item::Function(f) => checker.check_function(f, None),
-                Item::Impl(i) => for f in &i.methods {
-                    checker.check_function(f, Some(&i.type_name));
-                },
-                Item::Struct(_) => {}
-                Item::Import(_) => {}
+                Item::Function(function) => checker.check_function(function, None),
+                Item::Impl(implementation) => {
+                    for function in &implementation.methods {
+                        checker.check_function(function, Some(&implementation.type_name));
+                    }
+                }
+                Item::Struct(_) | Item::Import(_) => {}
             }
         }
 
         if checker.errors.is_empty() { Ok(()) } else { Err(checker.errors) }
     }
 
-    fn error(&mut self, message: impl Into<String>) {
-        self.errors.push(OwnershipError {
-            message: message.into(),
-            span: Span { line: 1, column: 1, length: 0 },
-        });
+    fn error_at(&mut self, span: Span, message: impl Into<String>) {
+        self.errors.push(OwnershipError { message: message.into(), span });
     }
 
     fn collect(&mut self, program: &Program) {
         for item in &program.items {
             match item {
-                Item::Function(f) => {
-                    self.functions.insert(f.name.clone(), FunctionSig {
-                        params: f.params.iter().map(|p| Type::from_ref(&p.ty)).collect(),
-                        return_type: f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                Item::Function(function) => {
+                    self.functions.insert(function.name.clone(), FunctionSig {
+                        params: function.params.iter().map(|parameter| Type::from_ref(&parameter.ty)).collect(),
+                        return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
                     });
                 }
-                Item::Impl(i) => for f in &i.methods {
-                    self.methods.insert(
-                        (i.type_name.clone(), f.name.clone()),
-                        FunctionSig {
-                            params: f.params.iter().map(|p| {
-                                if p.name == "self" {
-                                    Type::Reference {
-                                        mutable: p.ty.reference == ReferenceKind::Mutable,
-                                        inner: Box::new(Type::Named(i.type_name.clone())),
+                Item::Impl(implementation) => {
+                    for function in &implementation.methods {
+                        self.methods.insert(
+                            (implementation.type_name.clone(), function.name.clone()),
+                            FunctionSig {
+                                params: function.params.iter().map(|parameter| {
+                                    if parameter.name == "self" {
+                                        Type::Reference {
+                                            mutable: parameter.ty.reference == ReferenceKind::Mutable,
+                                            inner: Box::new(Type::Named(implementation.type_name.clone())),
+                                        }
+                                    } else {
+                                        Type::from_ref(&parameter.ty)
                                     }
-                                } else {
-                                    Type::from_ref(&p.ty)
-                                }
-                            }).collect(),
-                            return_type: f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
-                        },
-                    );
-                },
-                Item::Struct(_) => {}
-                Item::Import(_) => {}
+                                }).collect(),
+                                return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                            },
+                        );
+                    }
+                }
+                Item::Struct(_) | Item::Import(_) => {}
             }
         }
     }
 
-    fn check_function(&mut self, f: &Function, impl_type: Option<&str>) {
-        let sig = if let Some(t) = impl_type {
-            self.methods.get(&(t.to_string(), f.name.clone())).cloned()
+    fn check_function(&mut self, function: &Function, impl_type: Option<&str>) {
+        let signature = if let Some(type_name) = impl_type {
+            self.methods.get(&(type_name.to_string(), function.name.clone())).cloned()
         } else {
-            self.functions.get(&f.name).cloned()
+            self.functions.get(&function.name).cloned()
         };
-        let Some(sig) = sig else { return };
+        let Some(signature) = signature else { return };
 
         let mut env = Env::default();
         env.push();
-        for (i, p) in f.params.iter().enumerate() {
-            env.define(p.name.clone(), sig.params[i].clone());
+        for (index, parameter) in function.params.iter().enumerate() {
+            env.define(parameter.name.clone(), signature.params[index].clone());
         }
-        self.check_block(&f.body, &mut env);
+        self.check_block(&function.body, &mut env);
         env.pop();
     }
 
     fn check_block(&mut self, block: &Block, env: &mut Env) {
         env.push();
-        for stmt in &block.statements {
-            self.check_stmt(stmt, env);
+        for statement in &block.statements {
+            self.check_stmt(statement, env);
         }
         env.pop();
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt, env: &mut Env) {
-        match stmt {
-            Stmt::Let { name, initializer, ty, .. } => {
-                if let Some(expr) = initializer {
-                    let value_ty = self.expr(expr, env, true);
+    fn check_stmt(&mut self, statement: &Stmt, env: &mut Env) {
+        match &statement.kind {
+            StmtKind::Let { name, initializer, ty, .. } => {
+                if let Some(expression) = initializer {
+                    let value_ty = self.expr(expression, env, true);
                     let final_ty = ty.as_ref().map(Type::from_ref).unwrap_or(value_ty);
                     env.define(name.clone(), final_ty);
                 } else {
                     env.define(name.clone(), ty.as_ref().map(Type::from_ref).unwrap_or(Type::Unknown));
                 }
             }
-            Stmt::Expr(expr) => { self.expr(expr, env, false); }
-            Stmt::Return(expr) => {
-                if let Some(expr) = expr {
-                    self.expr(expr, env, true);
+            StmtKind::Expr(expression) => { self.expr(expression, env, false); }
+            StmtKind::Return(expression) => {
+                if let Some(expression) = expression {
+                    self.expr(expression, env, true);
                 }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            StmtKind::If { condition, then_branch, else_branch } => {
                 self.expr(condition, env, false);
                 self.check_block(then_branch, env);
-                if let Some(branch) = else_branch { self.check_stmt(branch, env); }
+                if let Some(branch) = else_branch {
+                    self.check_stmt(branch, env);
+                }
             }
-            Stmt::While { condition, body } => {
+            StmtKind::While { condition, body } => {
                 self.expr(condition, env, false);
                 self.check_block(body, env);
             }
-            Stmt::DoWhile { body, condition } => {
+            StmtKind::DoWhile { body, condition } => {
                 self.check_block(body, env);
                 self.expr(condition, env, false);
             }
-            Stmt::For { initializer, condition, update, body } => {
+            StmtKind::For { initializer, condition, update, body } => {
                 env.push();
-                if let Some(x) = initializer { self.check_stmt(x, env); }
-                if let Some(x) = condition { self.expr(x, env, false); }
-                if let Some(x) = update { self.expr(x, env, false); }
+                if let Some(initializer) = initializer { self.check_stmt(initializer, env); }
+                if let Some(condition) = condition { self.expr(condition, env, false); }
+                if let Some(update) = update { self.expr(update, env, false); }
                 self.check_block(body, env);
                 env.pop();
             }
-            Stmt::Block(block) => self.check_block(block, env),
+            StmtKind::Block(block) => self.check_block(block, env),
         }
     }
 
-    fn expr(&mut self, expr: &Expr, env: &mut Env, consume: bool) -> Type {
-        match expr {
-            Expr::Literal(Literal::Bool(_)) => Type::Bool,
-            Expr::Literal(Literal::String(_)) => Type::Str,
-            Expr::Literal(Literal::Number(n)) => self.number_type(n),
-            Expr::Identifier(name) => {
+    fn expr(&mut self, expression: &Expr, env: &mut Env, consume: bool) -> Type {
+        match &expression.kind {
+            ExprKind::Literal(Literal::Bool(_)) => Type::Bool,
+            ExprKind::Literal(Literal::String(_)) => Type::Str,
+            ExprKind::Literal(Literal::Number(number)) => self.number_type(number),
+            ExprKind::Identifier(name) => {
                 let ty = match env.get(name) {
                     Some(state) => state.ty.clone(),
                     None => {
                         if self.functions.contains_key(name) {
                             return Type::Named(format!("fn {}", name));
                         }
-                        self.error(format!("unknown identifier '{}'", name));
+                        self.error_at(expression.span, format!("unknown identifier '{}'", name));
                         return Type::Unknown;
                     }
                 };
-                self.ensure_available(name, env);
+                self.ensure_available(name, env, expression.span);
                 if consume && !ty.is_copy() {
                     self.move_value(name, env);
                 }
                 ty
             }
-            Expr::Unary { op, expr } => {
-                match op {
-                    UnaryOp::BorrowShared | UnaryOp::BorrowMutable => {
-                        self.expr(expr, env, false);
-                        let inner = self.expr_type(expr, env);
-                        Type::Reference { mutable: *op == UnaryOp::BorrowMutable, inner: Box::new(inner) }
-                    }
-                    _ => self.expr(expr, env, false),
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::BorrowShared | UnaryOp::BorrowMutable => {
+                    self.expr(expr, env, false);
+                    let inner = self.expr_type(expr, env);
+                    Type::Reference { mutable: *op == UnaryOp::BorrowMutable, inner: Box::new(inner) }
                 }
-            }
-            Expr::Grouping(inner) => self.expr(inner, env, consume),
-            Expr::Binary { left, right, .. } => {
+                _ => self.expr(expr, env, false),
+            },
+            ExprKind::Grouping(inner) => self.expr(inner, env, consume),
+            ExprKind::Binary { left, right, .. } => {
                 self.expr(left, env, false);
                 self.expr(right, env, false);
                 self.expr_type(left, env)
             }
-            Expr::Assignment { target, value, .. } => {
+            ExprKind::Assignment { target, value, .. } => {
                 if let Some(name) = self.root_identifier(target) {
-                    self.ensure_available(&name, env);
+                    self.ensure_available(&name, env, target.span);
                 }
                 let value_ty = self.expr(value, env, true);
                 self.expr(target, env, false);
@@ -231,25 +230,29 @@ impl OwnershipChecker {
                 }
                 value_ty
             }
-            Expr::Call { callee, args } => self.call(callee, args, env),
-            Expr::Member { object, .. } => self.expr(object, env, false),
-            Expr::Postfix { expr, .. } => self.expr(expr, env, false),
-            Expr::StructLiteral { fields, .. } => {
-                for (_, value) in fields { self.expr(value, env, true); }
-                Type::Named(match expr {
-                    Expr::StructLiteral { name, .. } => name.clone(),
-                    _ => String::new(),
-                })
+            ExprKind::Call { callee, args } => self.call(callee, args, env),
+            ExprKind::Member { object, .. } => self.expr(object, env, false),
+            ExprKind::Postfix { expr, .. } => self.expr(expr, env, false),
+            ExprKind::StructLiteral { name, fields } => {
+                for (_, value) in fields {
+                    self.expr(value, env, true);
+                }
+                Type::Named(name.clone())
             }
-            Expr::Array(values) => {
-                for value in values { self.expr(value, env, true); }
+            ExprKind::Array(values) => {
+                for value in values {
+                    self.expr(value, env, true);
+                }
                 if values.is_empty() {
                     Type::Array { element: Box::new(Type::Unknown), len: 0 }
                 } else {
-                    Type::Array { element: Box::new(self.expr_type(&values[0], env)), len: values.len() }
+                    Type::Array {
+                        element: Box::new(self.expr_type(&values[0], env)),
+                        len: values.len(),
+                    }
                 }
             }
-            Expr::Index { object, index } => {
+            ExprKind::Index { object, index } => {
                 self.expr(object, env, false);
                 self.expr(index, env, false);
                 match self.expr_type(object, env) {
@@ -262,69 +265,84 @@ impl OwnershipChecker {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Expr], env: &mut Env) -> Type {
-        if let Expr::Identifier(name) = callee {
+        if let ExprKind::Identifier(name) = &callee.kind {
             if name == "print" || name == "println" || name == "typeof" || name == "len" {
-                for arg in args { self.expr(arg, env, false); }
+                for argument in args {
+                    self.expr(argument, env, false);
+                }
                 return Type::Unit;
             }
-            if let Some(sig) = self.functions.get(name).cloned() {
-                return self.check_signature(&sig, args, env);
+            if let Some(signature) = self.functions.get(name).cloned() {
+                return self.check_signature(&signature, args, env);
             }
         }
 
-        if let Expr::Member { object, name } = callee {
+        if let ExprKind::Member { object, name } = &callee.kind {
             self.expr(object, env, false);
             let type_name = self.expr_type(object, env).display_name();
-            if let Some(sig) = self.methods.get(&(type_name, name.clone())).cloned() {
+            if let Some(signature) = self.methods.get(&(type_name, name.clone())).cloned() {
                 let mut all = vec![object.as_ref().clone()];
                 all.extend_from_slice(args);
-                return self.check_signature(&sig, &all, env);
+                return self.check_signature(&signature, &all, env);
             }
         }
 
-        for arg in args { self.expr(arg, env, false); }
+        for argument in args {
+            self.expr(argument, env, false);
+        }
         Type::Unknown
     }
 
-    fn check_signature(&mut self, sig: &FunctionSig, args: &[Expr], env: &mut Env) -> Type {
-        for (i, arg) in args.iter().enumerate() {
-            if let Some(expected) = sig.params.get(i) {
+    fn check_signature(&mut self, signature: &FunctionSig, args: &[Expr], env: &mut Env) -> Type {
+        for (index, argument) in args.iter().enumerate() {
+            if let Some(expected) = signature.params.get(index) {
                 let by_ref = matches!(expected, Type::Reference { .. });
-                self.expr(arg, env, !by_ref);
+                self.expr(argument, env, !by_ref);
             } else {
-                self.expr(arg, env, false);
+                self.expr(argument, env, false);
             }
         }
-        sig.return_type.clone()
+        signature.return_type.clone()
     }
 
-    fn expr_type(&self, expr: &Expr, env: &Env) -> Type {
-        match expr {
-            Expr::Identifier(n) => env.get(n).map(|s| s.ty.clone()).unwrap_or(Type::Unknown),
-            Expr::Literal(Literal::Bool(_)) => Type::Bool,
-            Expr::Literal(Literal::String(_)) => Type::Str,
-            Expr::Literal(Literal::Number(n)) => self.number_type(n),
-            Expr::Grouping(x) => self.expr_type(x, env),
-            Expr::Unary { op, expr } => match op {
-                UnaryOp::BorrowShared => Type::Reference { mutable: false, inner: Box::new(self.expr_type(expr, env)) },
-                UnaryOp::BorrowMutable => Type::Reference { mutable: true, inner: Box::new(self.expr_type(expr, env)) },
+    fn expr_type(&self, expression: &Expr, env: &Env) -> Type {
+        match &expression.kind {
+            ExprKind::Identifier(name) => env.get(name).map(|state| state.ty.clone()).unwrap_or(Type::Unknown),
+            ExprKind::Literal(Literal::Bool(_)) => Type::Bool,
+            ExprKind::Literal(Literal::String(_)) => Type::Str,
+            ExprKind::Literal(Literal::Number(number)) => self.number_type(number),
+            ExprKind::Grouping(inner) => self.expr_type(inner, env),
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::BorrowShared => Type::Reference {
+                    mutable: false,
+                    inner: Box::new(self.expr_type(expr, env)),
+                },
+                UnaryOp::BorrowMutable => Type::Reference {
+                    mutable: true,
+                    inner: Box::new(self.expr_type(expr, env)),
+                },
                 _ => self.expr_type(expr, env),
             },
-            Expr::Array(xs) => xs.first().map(|x| Type::Array { element: Box::new(self.expr_type(x, env)), len: xs.len() }).unwrap_or(Type::Array { element: Box::new(Type::Unknown), len: 0 }),
-            Expr::Index { object, .. } => match self.expr_type(object, env) {
+            ExprKind::Array(values) => values.first()
+                .map(|value| Type::Array {
+                    element: Box::new(self.expr_type(value, env)),
+                    len: values.len(),
+                })
+                .unwrap_or(Type::Array { element: Box::new(Type::Unknown), len: 0 }),
+            ExprKind::Index { object, .. } => match self.expr_type(object, env) {
                 Type::Array { element, .. } => *element,
                 Type::Str => Type::Char,
                 _ => Type::Unknown,
             },
-            Expr::StructLiteral { name, .. } => Type::Named(name.clone()),
+            ExprKind::StructLiteral { name, .. } => Type::Named(name.clone()),
             _ => Type::Unknown,
         }
     }
 
-    fn ensure_available(&mut self, name: &str, env: &Env) {
+    fn ensure_available(&mut self, name: &str, env: &Env, span: Span) {
         if let Some(state) = env.get(name) {
             if state.moved {
-                self.error(format!("use of moved value '{}'", name));
+                self.error_at(span, format!("use of moved value '{}'", name));
             }
         }
     }
@@ -335,27 +353,28 @@ impl OwnershipChecker {
         }
     }
 
-    fn root_identifier(&self, expr: &Expr) -> Option<String> {
-        match expr {
-            Expr::Identifier(n) => Some(n.clone()),
-            Expr::Member { object, .. } | Expr::Index { object, .. } => self.root_identifier(object),
-            Expr::Grouping(inner) => self.root_identifier(inner),
+    fn root_identifier(&self, expression: &Expr) -> Option<String> {
+        match &expression.kind {
+            ExprKind::Identifier(name) => Some(name.clone()),
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => self.root_identifier(object),
+            ExprKind::Grouping(inner) => self.root_identifier(inner),
             _ => None,
         }
     }
 
-    fn number_type(&self, n: &str) -> Type {
-        let l = n.to_ascii_lowercase();
-        for s in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"] {
-            if l.ends_with(s) {
-                return match s {
-                    "u8"=>Type::U8,"u16"=>Type::U16,"u32"=>Type::U32,"u64"=>Type::U64,"u128"=>Type::U128,"u256"=>Type::U256,
-                    "i8"=>Type::I8,"i16"=>Type::I16,"i32"=>Type::I32,"i64"=>Type::I64,"i128"=>Type::I128,"i256"=>Type::I256,
-                    "f32"=>Type::F32,"f64"=>Type::F64,"f128"=>Type::F128,_=>Type::Unknown
+    fn number_type(&self, number: &str) -> Type {
+        let lower = number.to_ascii_lowercase();
+        for suffix in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"] {
+            if lower.ends_with(suffix) {
+                return match suffix {
+                    "u8"=>Type::U8, "u16"=>Type::U16, "u32"=>Type::U32, "u64"=>Type::U64,
+                    "u128"=>Type::U128, "u256"=>Type::U256, "i8"=>Type::I8, "i16"=>Type::I16,
+                    "i32"=>Type::I32, "i64"=>Type::I64, "i128"=>Type::I128, "i256"=>Type::I256,
+                    "f32"=>Type::F32, "f64"=>Type::F64, "f128"=>Type::F128, _=>Type::Unknown,
                 };
             }
         }
-        if l.contains('.') { Type::F64 } else { Type::I32 }
+        if lower.contains('.') { Type::F64 } else { Type::I32 }
     }
 }
 
@@ -378,7 +397,8 @@ mod tests {
             let b = a
             println(a)
         }"#;
-        assert!(check(source).is_err());
+        let error = check(source).unwrap_err().remove(0);
+        assert!(error.span.line >= 3);
     }
 
     #[test]
@@ -422,5 +442,16 @@ mod tests {
             println(a)
         }"#;
         assert!(check(source).is_ok());
+    }
+
+    #[test]
+    fn mutable_reference_binding_moves() {
+        let source = r#"fn main() {
+            let mut value = 1
+            let first = &mut value
+            let second = first
+            let third = first
+        }"#;
+        assert!(check(source).is_err());
     }
 }
