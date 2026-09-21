@@ -255,6 +255,7 @@ impl Parser {
             TokenKind::Let => self.parse_let(false),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
+            TokenKind::Loop => self.parse_loop(),
             TokenKind::Do => self.parse_do_while(),
             TokenKind::For => self.parse_for(),
             TokenKind::Match => self.parse_match(),
@@ -323,6 +324,14 @@ impl Parser {
         let body = self.parse_block()?;
         let span = start.join(body.span);
         Ok(Stmt::new(StmtKind::While { condition, body }, span))
+    }
+
+    fn parse_loop(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.expect(TokenKind::Loop, "expected loop")?.span;
+        self.skip_newlines();
+        let body = self.parse_block()?;
+        let span = start.join(body.span);
+        Ok(Stmt::new(StmtKind::Loop { body }, span))
     }
 
     fn parse_do_while(&mut self) -> Result<Stmt, ParseError> {
@@ -422,7 +431,7 @@ impl Parser {
             || self.check(TokenKind::RightBrace)
             || matches!(
                 self.peek().kind,
-                TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do |
+                TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Loop | TokenKind::Do |
                 TokenKind::For | TokenKind::Match | TokenKind::Return | TokenKind::Break |
                 TokenKind::Continue | TokenKind::LeftBrace
             )
@@ -700,7 +709,7 @@ impl Parser {
         if self.check(TokenKind::RightBrace) || self.check(TokenKind::Eof) { return Ok(()); }
         if matches!(
             self.peek().kind,
-            TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do | TokenKind::For |
+            TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Loop | TokenKind::Do | TokenKind::For |
             TokenKind::Match | TokenKind::Return | TokenKind::Break | TokenKind::Continue |
             TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
             TokenKind::String | TokenKind::True | TokenKind::False | TokenKind::Bang | TokenKind::Minus |
@@ -809,11 +818,13 @@ mod tests {
 
     #[test]
     fn parses_break_and_continue() {
-        let program = parse("fn main(){while true { break } for(;true;){ continue }}");
+        let program = parse("fn main(){while true { break } loop { continue } for(;true;){ continue }}");
         let Item::Function(function) = &program.items[0] else { panic!("expected function") };
         let StmtKind::While { body, .. } = &function.body.statements[0].kind else { panic!("expected while") };
         assert!(matches!(body.statements[0].kind, StmtKind::Break));
-        let StmtKind::For { body, .. } = &function.body.statements[1].kind else { panic!("expected for") };
+        let StmtKind::Loop { body } = &function.body.statements[1].kind else { panic!("expected loop") };
+        assert!(matches!(body.statements[0].kind, StmtKind::Continue));
+        let StmtKind::For { body, .. } = &function.body.statements[2].kind else { panic!("expected for") };
         assert!(matches!(body.statements[0].kind, StmtKind::Continue));
     }
 
