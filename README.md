@@ -188,15 +188,39 @@ fn main() {
 
 Namespaced imports do not inject their functions into the importing file's unqualified function namespace. This allows different modules to export functions with the same name. Plain `use "math.rcl"` remains available for unqualified imports.
 
+Fieldless enums and exhaustive `match` are supported:
+
+~~~rcl
+enum Color {
+    Red
+    Green
+}
+
+fn main() {
+    let color: Color = Color.Green
+
+    match color {
+        Color.Red => {
+            println("red")
+        }
+        Color.Green => {
+            println("green")
+        }
+    }
+}
+~~~
+
+The compiler rejects unknown variants, duplicate arms, and non-exhaustive enum matches.
+
 ## Compiler pipeline
 
 RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> clang/LLVM -> native executable.
 
 ## LLVM backend milestone
 
-The first backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, and print/println runtime calls.
+The LLVM backend covers native scalar values, strings, arithmetic, comparisons, boolean operations, local storage, control-flow blocks, returns, direct function calls, references as pointers, structs, fixed arrays, fieldless enums, exhaustive match lowering, and print/println runtime calls.
 
-Struct field lowering, arrays, indirect calls, richer reference lowering, target-specific ABI details, and optimization passes remain separate backend milestones.
+Indirect calls, richer reference lowering, payload-carrying enums, target-specific ABI details, and deeper optimization passes remain future backend milestones.
 
 
 ## Defined semantics
