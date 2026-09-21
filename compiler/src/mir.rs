@@ -159,8 +159,6 @@ impl MirLowerer {
     }
 
     fn finalize_temporaries(function: &mut MirFunction, temp_start: usize) {
-        let mut dead_at_entry = std::collections::HashMap::<BasicBlockId, Vec<LocalId>>::new();
-
         let mut referenced_in_blocks = std::collections::HashMap::<LocalId, std::collections::HashSet<BasicBlockId>>::new();
         for block in &function.blocks {
             let mut referenced = std::collections::HashSet::<LocalId>::new();
@@ -191,38 +189,11 @@ impl MirLowerer {
                 .unwrap_or(false)
         };
 
-        for block in &function.blocks {
-            let mut temps = std::collections::HashSet::<LocalId>::new();
-            for statement in &block.statements {
-                match statement {
-                    MirStatement::StorageLive(id) if *id >= temp_start => { temps.insert(*id); }
-                    _ => {}
-                }
-            }
-
-            // Temporaries used by ordinary statements die immediately after their
-            // last statement use. We currently keep this conservative: a temp that
-            // is live in a block but not used by its terminator can die at block end.
-            let terminator_temps = match &block.terminator {
-                Terminator::SwitchBool { condition, .. } => Self::operand_locals(condition),
-                Terminator::Return(Some(value)) => Self::rvalue_locals(value),
-                _ => std::collections::HashSet::new(),
-            };
-
-            for temp in temps {
-                if terminator_temps.contains(&temp) && !crosses_block(temp, block.id) {
-                    // The value is consumed by the terminator. It cannot be dead
-                    // before the terminator, so release it at every successor.
-                    for successor in match &block.terminator {
-                        Terminator::Goto(t) => vec![*t],
-                        Terminator::SwitchBool { then_block, else_block, .. } => vec![*then_block, *else_block],
-                        _ => Vec::new(),
-                    } {
-                        dead_at_entry.entry(successor).or_default().push(temp);
-                    }
-                }
-            }
-        }
+        // A temporary consumed by a terminator stays live across the outgoing
+        // edge. Inserting StorageDead at a shared successor is unsound because
+        // another predecessor may reach that block without ever making the temp
+        // live. Compiler-generated terminator temps are therefore kept alive
+        // conservatively; they are not user-visible and need no edge-local drop.
 
         let mut dead_before_terminator = std::collections::HashMap::<BasicBlockId, Vec<LocalId>>::new();
         for block in &function.blocks {
@@ -249,15 +220,6 @@ impl MirLowerer {
             }
         }
 
-        for (block_id, mut locals) in dead_at_entry {
-            locals.sort_unstable();
-            locals.dedup();
-            if let Some(block) = function.blocks.get_mut(block_id) {
-                let mut prefix = locals.into_iter().map(MirStatement::StorageDead).collect::<Vec<_>>();
-                prefix.append(&mut block.statements);
-                block.statements = prefix;
-            }
-        }
     }
 
     fn operand_locals(operand: &Operand) -> std::collections::HashSet<LocalId> {
