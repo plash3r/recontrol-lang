@@ -372,7 +372,7 @@ impl HirLowerer {
             },
             ast::Expr::Array(values) => {
                 let values: Vec<_> = values.iter().map(|e| self.lower_expr(e)).collect();
-                let ty = values.first().map(|e| Type::Array(Box::new(e.ty.clone()))).unwrap_or(Type::Array(Box::new(Type::Unknown)));
+                let ty = values.first().map(|e| Type::Array { element: Box::new(e.ty.clone()), len: values.len() }).unwrap_or(Type::Array { element: Box::new(Type::Unknown), len: 0 });
                 HirExpr { ty, kind: HirExprKind::Array(values) }
             }
             ast::Expr::Index { object, index } => {
