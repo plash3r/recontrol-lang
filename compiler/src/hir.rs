@@ -22,7 +22,13 @@ pub struct HirProgram {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirEnum {
     pub name: String,
-    pub variants: Vec<String>,
+    pub variants: Vec<HirEnumVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirEnumVariant {
+    pub name: String,
+    pub payload: Vec<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +89,15 @@ pub enum HirStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirMatchArm {
     pub discriminant: usize,
+    pub bindings: Vec<HirMatchBinding>,
     pub body: HirBlock,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirMatchBinding {
+    pub local: LocalId,
+    pub field_index: usize,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,7 +119,7 @@ pub enum HirExprKind {
     StructLiteral { name: String, fields: Vec<(String, HirExpr)> },
     Array(Vec<HirExpr>),
     Index { object: Box<HirExpr>, index: Box<HirExpr> },
-    EnumVariant { name: String, discriminant: usize },
+    EnumVariant { name: String, discriminant: usize, values: Vec<HirExpr> },
     Function(FunctionId),
 }
 
@@ -116,7 +130,7 @@ pub struct HirLowerer {
     functions: Vec<HirFunction>,
     structs: Vec<HirStruct>,
     enums: Vec<HirEnum>,
-    enum_variants: HashMap<(usize, String), Vec<String>>,
+    enum_variants: HashMap<(usize, String), Vec<(String, Vec<Type>)>>,
     scopes: Vec<HashMap<String, LocalId>>,
     local_types: HashMap<LocalId, Type>,
     function_ids: HashMap<(usize, String), FunctionId>,
@@ -157,7 +171,12 @@ impl HirLowerer {
             if let ast::Item::Enum(definition) = item {
                 lowerer.enum_variants.insert(
                     (definition.span.source_id, definition.name.clone()),
-                    definition.variants.iter().map(|variant| variant.name.clone()).collect(),
+                    definition.variants.iter().map(|variant| {
+                        (
+                            variant.name.clone(),
+                            variant.payload.iter().map(Type::from_ref).collect(),
+                        )
+                    }).collect(),
                 );
             }
         }
@@ -210,7 +229,10 @@ impl HirLowerer {
                 }),
                 ast::Item::Enum(e) => lowerer.enums.push(HirEnum {
                     name: e.name.clone(),
-                    variants: e.variants.iter().map(|variant| variant.name.clone()).collect(),
+                    variants: e.variants.iter().map(|variant| HirEnumVariant {
+                        name: variant.name.clone(),
+                        payload: variant.payload.iter().map(Type::from_ref).collect(),
+                    }).collect(),
                 }),
                 ast::Item::Function(f) => lowerer.lower_function(f, None),
                 ast::Item::Impl(i) => {
@@ -334,15 +356,33 @@ impl HirLowerer {
             ast::StmtKind::Match { value, arms } => HirStmt::Match {
                 value: self.lower_expr(value),
                 arms: arms.iter().map(|arm| {
-                    let discriminant = self.resolve_enum_variant(
+                    let (discriminant, payload) = self.resolve_enum_variant(
                         arm.span.source_id,
                         &arm.enum_name,
                         &arm.variant,
-                    ).unwrap_or(0);
-                    HirMatchArm {
-                        discriminant,
-                        body: self.lower_block(&arm.body),
+                    ).unwrap_or((0, Vec::new()));
+                    self.scopes.push(HashMap::new());
+                    let mut bindings = Vec::new();
+                    let mut body = HirBlock { locals: Vec::new(), statements: Vec::new() };
+                    for (field_index, binding) in arm.bindings.iter().enumerate() {
+                        if binding == "_" { continue; }
+                        let local = self.new_local();
+                        let ty = payload.get(field_index).cloned().unwrap_or(Type::Unknown);
+                        self.scopes.last_mut().unwrap().insert(binding.clone(), local);
+                        self.local_types.insert(local, ty.clone());
+                        body.locals.push(HirLocal {
+                            id: local,
+                            name: binding.clone(),
+                            ty: ty.clone(),
+                            mutable: false,
+                        });
+                        bindings.push(HirMatchBinding { local, field_index, ty });
                     }
+                    for statement in &arm.body.statements {
+                        body.statements.push(self.lower_stmt(statement, &mut body.locals));
+                    }
+                    self.scopes.pop();
+                    HirMatchArm { discriminant, bindings, body }
                 }).collect(),
             },
             ast::StmtKind::Block(b) => HirStmt::Block(self.lower_block(b)),
@@ -394,6 +434,25 @@ impl HirLowerer {
                 HirExpr { ty: target.ty.clone(), kind: HirExprKind::Assignment { target: Box::new(target), op: *op, value: Box::new(value) } }
             }
             ast::ExprKind::Call { callee, args } => {
+                if let ast::ExprKind::Member { object, name } = &callee.kind {
+                    if let ast::ExprKind::Identifier(enum_name) = &object.kind {
+                        if self.namespace_target(callee.span.source_id, enum_name).is_none() {
+                            if let Some((discriminant, _payload)) =
+                                self.resolve_enum_variant(callee.span.source_id, enum_name, name)
+                            {
+                                return HirExpr {
+                                    ty: Type::Named(enum_name.clone()),
+                                    kind: HirExprKind::EnumVariant {
+                                        name: enum_name.clone(),
+                                        discriminant,
+                                        values: args.iter().map(|argument| self.lower_expr(argument)).collect(),
+                                    },
+                                };
+                            }
+                        }
+                    }
+                }
+
                 let (callee, args) = if let ast::ExprKind::Member { object, name } = &callee.kind {
                     if let ast::ExprKind::Identifier(namespace) = &object.kind {
                         if let Some(target_source_id) =
@@ -433,16 +492,19 @@ impl HirLowerer {
             }
             ast::ExprKind::Member { object, name } => {
                 if let ast::ExprKind::Identifier(enum_name) = &object.kind {
-                    if let Some(discriminant) =
+                    if let Some((discriminant, payload)) =
                         self.resolve_enum_variant(expr.span.source_id, enum_name, name)
                     {
-                        return HirExpr {
-                            ty: Type::Named(enum_name.clone()),
-                            kind: HirExprKind::EnumVariant {
-                                name: enum_name.clone(),
-                                discriminant,
-                            },
-                        };
+                        if payload.is_empty() {
+                            return HirExpr {
+                                ty: Type::Named(enum_name.clone()),
+                                kind: HirExprKind::EnumVariant {
+                                    name: enum_name.clone(),
+                                    discriminant,
+                                    values: Vec::new(),
+                                },
+                            };
+                        }
                     }
                 }
                 let object = self.lower_expr(object);
@@ -508,9 +570,13 @@ impl HirLowerer {
             .find_map(|(_, target)| self.function_ids.get(&(*target, name.to_string())).copied())
     }
 
-    fn resolve_enum_variant(&self, source_id: usize, enum_name: &str, variant: &str) -> Option<usize> {
+    fn resolve_enum_variant(&self, source_id: usize, enum_name: &str, variant: &str) -> Option<(usize, Vec<Type>)> {
         if let Some(variants) = self.enum_variants.get(&(source_id, enum_name.to_string())) {
-            return variants.iter().position(|candidate| candidate == variant);
+            if let Some((index, (_, payload))) = variants.iter().enumerate()
+                .find(|(_, (candidate, _))| candidate == variant)
+            {
+                return Some((index, payload.clone()));
+            }
         }
         self.imports.get(&source_id)
             .into_iter()
@@ -518,7 +584,9 @@ impl HirLowerer {
             .filter(|(alias, _)| alias.is_none())
             .find_map(|(_, target)| self.enum_variants
                 .get(&(*target, enum_name.to_string()))
-                .and_then(|variants| variants.iter().position(|candidate| candidate == variant)))
+                .and_then(|variants| variants.iter().enumerate()
+                    .find(|(_, (candidate, _))| candidate == variant)
+                    .map(|(index, (_, payload))| (index, payload.clone()))))
     }
 
     fn resolve_method_id(&self, source_id: usize, type_name: &str, name: &str) -> Option<FunctionId> {
