@@ -1,11 +1,39 @@
+use crate::lexer::Span;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program { pub items: Vec<Item> }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Item { Function(Function), Struct(StructDef), Impl(ImplBlock), Import(String) }
+pub enum Item {
+    Function(Function),
+    Struct(StructDef),
+    Impl(ImplBlock),
+    Import(Import),
+}
+
+impl Item {
+    pub fn span(&self) -> Span {
+        match self {
+            Item::Function(value) => value.span,
+            Item::Struct(value) => value.span,
+            Item::Impl(value) => value.span,
+            Item::Import(value) => value.span,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ImplBlock { pub type_name: String, pub methods: Vec<Function> }
+pub struct Import {
+    pub path: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock {
+    pub type_name: String,
+    pub methods: Vec<Function>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -13,22 +41,48 @@ pub struct Function {
     pub params: Vec<Parameter>,
     pub return_type: Option<TypeRef>,
     pub body: Block,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Parameter { pub name: String, pub ty: TypeRef }
+pub struct Parameter {
+    pub name: String,
+    pub ty: TypeRef,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDef { pub name: String, pub fields: Vec<Field> }
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Field>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Field { pub name: String, pub ty: TypeRef }
+pub struct Field {
+    pub name: String,
+    pub ty: TypeRef,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Block { pub statements: Vec<Stmt> }
+pub struct Block {
+    pub statements: Vec<Stmt>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub span: Span,
+}
+
+impl Stmt {
+    pub fn new(kind: StmtKind, span: Span) -> Self { Self { kind, span } }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtKind {
     Let { name: String, mutable: bool, ty: Option<TypeRef>, initializer: Option<Expr> },
     Expr(Expr),
     Return(Option<Expr>),
@@ -40,7 +94,17 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, span: Span) -> Self { Self { kind, span } }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     Literal(Literal),
     Identifier(String),
     Unary { op: UnaryOp, expr: Box<Expr> },
@@ -75,7 +139,12 @@ pub enum PostfixOp { Increment, Decrement }
 pub enum AssignOp { Assign, Add, Subtract, Multiply, Divide, Modulo }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef { pub name: String, pub reference: ReferenceKind, pub array_len: Option<usize> }
+pub struct TypeRef {
+    pub name: String,
+    pub reference: ReferenceKind,
+    pub array_len: Option<usize>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind { Value, Shared, Mutable }
