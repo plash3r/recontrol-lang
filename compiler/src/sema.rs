@@ -137,7 +137,7 @@ impl SemanticAnalyzer {
     }
     fn signature(&mut self,s:&FunctionSig,args:&[Expr],e:&Env)->Type{
         if args.len()!=s.params.len(){self.error(format!("wrong argument count: expected {}, found {}",s.params.len(),args.len()));}
-        for(i,a)in args.iter().enumerate(){let actual=self.expr(a,e);if let Some(expected)=s.params.get(i){let ok=match expected{Type::Reference{inner,..} if i==0=>self.compatible(inner,&actual),_=>self.compatible(expected,&actual)};if !ok{self.error(format!("argument {} type mismatch: expected {}, found {}",i+1,expected.display_name(),actual.display_name()));}}}s.return_type.clone()
+        for(i,a)in args.iter().enumerate(){let actual=self.expr(a,e);if let Some(expected)=s.params.get(i){let ok=self.compatible(expected,&actual);if !ok{self.error(format!("argument {} type mismatch: expected {}, found {}",i+1,expected.display_name(),actual.display_name()));}}}s.return_type.clone()
     }
     fn member(&mut self,o:&Expr,n:&str,e:&Env)->Type{
         let t=self.expr(o,e);let tn=match t{Type::Named(x)=>x,Type::Reference{inner,..}=>match *inner{Type::Named(x)=>x,_=>String::new()},_=>String::new()};
