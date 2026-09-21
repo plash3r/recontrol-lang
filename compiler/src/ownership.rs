@@ -206,7 +206,7 @@ impl OwnershipChecker {
                 let ty = match env.get(name) {
                     Some(state) => state.ty.clone(),
                     None => {
-                        if self.functions.contains_key(name) {
+                        if self.resolve_function(expression.span.source_id, name).is_some() {
                             return Type::Named(format!("fn {}", name));
                         }
                         self.error_at(expression.span, format!("unknown identifier '{}'", name));
