@@ -32,6 +32,12 @@ struct StructInfo {
     source_id: usize,
 }
 
+#[derive(Debug, Clone)]
+struct ImportInfo {
+    target_source_id: usize,
+    alias: Option<String>,
+}
+
 #[derive(Debug, Default)]
 struct Env {
     vars: Vec<HashMap<String, Type>>,
@@ -69,9 +75,10 @@ impl Env {
 }
 
 pub struct SemanticAnalyzer {
-    functions: HashMap<String, FunctionSig>,
-    structs: HashMap<String, StructInfo>,
-    methods: HashMap<(String, String), FunctionSig>,
+    functions: HashMap<(usize, String), FunctionSig>,
+    structs: HashMap<(usize, String), StructInfo>,
+    methods: HashMap<(usize, String, String), FunctionSig>,
+    imports: HashMap<usize, Vec<ImportInfo>>,
     errors: Vec<SemanticError>,
 }
 
@@ -81,6 +88,7 @@ impl SemanticAnalyzer {
             functions: HashMap::new(),
             structs: HashMap::new(),
             methods: HashMap::new(),
+            imports: HashMap::new(),
             errors: Vec::new(),
         };
         analyzer.collect(program);
