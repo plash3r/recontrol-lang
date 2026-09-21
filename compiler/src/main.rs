@@ -17,13 +17,6 @@ use rcl::ownership::OwnershipChecker;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
-#[derive(Debug)]
-struct SourceFile {
-    path: PathBuf,
-    source: String,
-}
-
-
 #[derive(Debug, Clone)]
 struct SourceFile {
     path: PathBuf,
