@@ -136,6 +136,36 @@ impl MirLowerer {
     fn finalize_temporaries(function: &mut MirFunction, temp_start: usize) {
         let mut dead_at_entry = std::collections::HashMap::<BasicBlockId, Vec<LocalId>>::new();
 
+        let mut referenced_in_blocks = std::collections::HashMap::<LocalId, std::collections::HashSet<BasicBlockId>>::new();
+        for block in &function.blocks {
+            let mut referenced = std::collections::HashSet::<LocalId>::new();
+            for statement in &block.statements {
+                match statement {
+                    MirStatement::StorageLive(_) | MirStatement::StorageDead(_) => {}
+                    MirStatement::Assign { place, rvalue } => {
+                        referenced.extend(Self::place_locals(place));
+                        referenced.extend(Self::rvalue_locals(rvalue));
+                    }
+                    MirStatement::Evaluate(rvalue) => referenced.extend(Self::rvalue_locals(rvalue)),
+                }
+            }
+            match &block.terminator {
+                Terminator::SwitchBool { condition, .. } => referenced.extend(Self::operand_locals(condition)),
+                Terminator::Return(Some(value)) => referenced.extend(Self::rvalue_locals(value)),
+                Terminator::Goto(_) | Terminator::Return(None) | Terminator::Unreachable => {}
+            }
+            for local in referenced {
+                referenced_in_blocks.entry(local).or_default().insert(block.id);
+            }
+        }
+
+        let crosses_block = |local: LocalId, defining_block: BasicBlockId| {
+            referenced_in_blocks
+                .get(&local)
+                .map(|blocks| blocks.iter().any(|block| *block != defining_block))
+                .unwrap_or(false)
+        };
+
         for block in &function.blocks {
             let mut temps = std::collections::HashSet::<LocalId>::new();
             for statement in &block.statements {
@@ -155,7 +185,7 @@ impl MirLowerer {
             };
 
             for temp in temps {
-                if terminator_temps.contains(&temp) {
+                if terminator_temps.contains(&temp) && !crosses_block(temp, block.id) {
                     // The value is consumed by the terminator. It cannot be dead
                     // before the terminator, so release it at every successor.
                     for successor in match &block.terminator {
@@ -178,7 +208,7 @@ impl MirLowerer {
             };
             for statement in &block.statements {
                 if let MirStatement::StorageLive(id) = statement {
-                    if *id >= temp_start && !terminator_temps.contains(id) {
+                    if *id >= temp_start && !terminator_temps.contains(id) && !crosses_block(*id, block.id) {
                         dead_before_terminator.entry(block.id).or_default().push(*id);
                     }
                 }
@@ -346,6 +376,9 @@ impl MirLowerer {
                 }
             }
             HirExprKind::Function(id) => Operand::Function(*id),
+            HirExprKind::Binary { left, op: op @ (BinaryOp::And | BinaryOp::Or), right } => {
+                Self::lower_short_circuit(builder, locals, left, *op, right)
+            }
             _ => {
                 let temp = Self::new_temp(locals, expr.ty.clone());
                 builder.statement(MirStatement::StorageLive(temp));
@@ -361,6 +394,54 @@ impl MirLowerer {
                     }
             }
         }
+    }
+
+    fn lower_short_circuit(
+        builder: &mut Builder,
+        locals: &mut Vec<MirLocal>,
+        left: &HirExpr,
+        op: BinaryOp,
+        right: &HirExpr,
+    ) -> Operand {
+        debug_assert!(matches!(op, BinaryOp::And | BinaryOp::Or));
+
+        let result = Self::new_temp(locals, Type::Bool);
+        builder.statement(MirStatement::StorageLive(result));
+
+        let left = Self::lower_operand(builder, locals, left);
+        let rhs_block = builder.new_block();
+        let short_block = builder.new_block();
+        let join_block = builder.new_block();
+
+        let (then_block, else_block, short_value) = match op {
+            BinaryOp::And => (rhs_block, short_block, false),
+            BinaryOp::Or => (short_block, rhs_block, true),
+            _ => unreachable!(),
+        };
+
+        builder.finish_block(Terminator::SwitchBool {
+            condition: left,
+            then_block,
+            else_block,
+        });
+
+        builder.switch_to(short_block);
+        builder.statement(MirStatement::Assign {
+            place: Place::Local(result),
+            rvalue: Rvalue::Use(Operand::Constant(Literal::Bool(short_value))),
+        });
+        builder.finish_block(Terminator::Goto(join_block));
+
+        builder.switch_to(rhs_block);
+        let right = Self::lower_operand(builder, locals, right);
+        builder.statement(MirStatement::Assign {
+            place: Place::Local(result),
+            rvalue: Rvalue::Use(right),
+        });
+        builder.finish_block(Terminator::Goto(join_block));
+
+        builder.switch_to(join_block);
+        Operand::Copy(Place::Local(result))
     }
 
     fn lower_rvalue(builder: &mut Builder, locals: &mut Vec<MirLocal>, expr: &HirExpr) -> Rvalue {
@@ -386,6 +467,9 @@ impl MirLowerer {
                     op: *op,
                     operand: Self::lower_operand(builder, locals, expr),
                 }
+            }
+            HirExprKind::Binary { left, op: op @ (BinaryOp::And | BinaryOp::Or), right } => {
+                Rvalue::Use(Self::lower_short_circuit(builder, locals, left, *op, right))
             }
             HirExprKind::Binary { left, op, right } => Rvalue::Binary {
                 left: Self::lower_operand(builder, locals, left),
