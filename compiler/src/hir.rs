@@ -82,6 +82,7 @@ pub enum HirStmt {
     Continue,
     If { condition: HirExpr, then_branch: HirBlock, else_branch: Option<Box<HirStmt>> },
     While { condition: HirExpr, body: HirBlock },
+    Loop { body: HirBlock },
     DoWhile { body: HirBlock, condition: HirExpr },
     For { initializer: Option<Box<HirStmt>>, condition: Option<HirExpr>, update: Option<HirExpr>, body: HirBlock },
     Match { value: HirExpr, arms: Vec<HirMatchArm> },
@@ -345,6 +346,9 @@ impl HirLowerer {
             },
             ast::StmtKind::While { condition, body } => HirStmt::While {
                 condition: self.lower_expr(condition),
+                body: self.lower_block(body),
+            },
+            ast::StmtKind::Loop { body } => HirStmt::Loop {
                 body: self.lower_block(body),
             },
             ast::StmtKind::DoWhile { body, condition } => HirStmt::DoWhile {
