@@ -17,6 +17,12 @@ use rcl::ownership::OwnershipChecker;
 use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
+#[derive(Debug)]
+struct SourceFile {
+    path: PathBuf,
+    source: String,
+}
+
 
 #[derive(Debug, Clone)]
 struct SourceFile {
@@ -29,38 +35,19 @@ fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
     let program = load_program(Path::new(path), &mut Vec::new(), &mut sources)?;
 
     SemanticAnalyzer::check(&program).map_err(|errors| {
-        format_errors(
-            errors
-                .into_iter()
-                .map(|error| format_source_error(&sources, error.span, error.message))
-                .collect(),
-        )
+        format_errors(errors.into_iter()
+            .map(|error| format_source_error(&sources, error.span, error.message))
+            .collect())
     })?;
-
     BorrowChecker::check(&program).map_err(|errors| {
-        format_errors(
-            errors
-                .into_iter()
-                .map(|error| {
-                    let mut rendered =
-                        format_source_error(&sources, error.span, error.message);
-                    if let Some((span, label)) = error.secondary {
-                        rendered.push_str("\n");
-                        rendered.push_str(&format_source_note(&sources, span, label));
-                    }
-                    rendered
-                })
-                .collect(),
-        )
+        format_errors(errors.into_iter()
+            .map(|error| format_borrow_error(&sources, error))
+            .collect())
     })?;
-
     OwnershipChecker::check(&program).map_err(|errors| {
-        format_errors(
-            errors
-                .into_iter()
-                .map(|error| format_source_error(&sources, error.span, error.message))
-                .collect(),
-        )
+        format_errors(errors.into_iter()
+            .map(|error| format_source_error(&sources, error.span, error.message))
+            .collect())
     })?;
 
     let hir = HirLowerer::lower(&program);
@@ -80,10 +67,8 @@ fn load_program(
     stack: &mut Vec<PathBuf>,
     sources: &mut Vec<SourceFile>,
 ) -> Result<Program, String> {
-    let canonical = path
-        .canonicalize()
+    let canonical = path.canonicalize()
         .map_err(|e| format!("rcl: cannot resolve {}: {e}", path.display()))?;
-
     if let Some(index) = stack.iter().position(|item| item == &canonical) {
         let mut cycle = stack[index..]
             .iter()
@@ -101,25 +86,18 @@ fn load_program(
         source: source.clone(),
     });
 
-    let tokens = Lexer::with_source_id(&source, source_id)
-        .tokenize()
-        .map_err(|errors| {
-            format_errors(
-                errors
-                    .into_iter()
-                    .map(|error| format_source_error(sources, error.span, error.message))
-                    .collect(),
-            )
-        })?;
-
-    let program = Parser::new(tokens).parse().map_err(|errors| {
-        format_errors(
-            errors
-                .into_iter()
+    let tokens = Lexer::with_source_id(&source, source_id).tokenize()
+        .map_err(|errors| format_errors(
+            errors.into_iter()
                 .map(|error| format_source_error(sources, error.span, error.message))
                 .collect(),
-        )
-    })?;
+        ))?;
+    let program = Parser::new(tokens).parse()
+        .map_err(|errors| format_errors(
+            errors.into_iter()
+                .map(|error| format_source_error(sources, error.span, error.message))
+                .collect(),
+        ))?;
 
     stack.push(canonical.clone());
     let mut items = Vec::new();
@@ -130,14 +108,12 @@ fn load_program(
                     canonical.parent().unwrap_or(Path::new(".")),
                     &import.path,
                 );
-                let imported = load_program(&import_path, stack, sources)?;
-                items.extend(imported.items);
+                items.extend(load_program(&import_path, stack, sources)?.items);
             }
             item => items.push(item),
         }
     }
     stack.pop();
-
     Ok(Program { items })
 }
 
@@ -151,26 +127,10 @@ fn resolve_import_path(base: &Path, import: &str) -> PathBuf {
 }
 
 fn format_errors(errors: Vec<String>) -> String {
-    errors
-        .into_iter()
+    errors.into_iter()
         .map(|error| format!("error: {error}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn source_for_span<'a>(sources: &'a [SourceFile], span: rcl::lexer::Span) -> Option<&'a SourceFile> {
-    sources.get(span.source_id)
-}
-
-fn span_width(span: rcl::lexer::Span) -> usize {
-    if span.end_line == span.line {
-        span.end_column
-            .saturating_sub(span.column)
-            .max(span.length)
-            .max(1)
-    } else {
-        span.length.max(1)
-    }
 }
 
 fn format_source_error(
@@ -178,71 +138,48 @@ fn format_source_error(
     span: rcl::lexer::Span,
     message: String,
 ) -> String {
-    let Some(file) = source_for_span(sources, span) else {
-        return format!("<unknown source>: {}", message);
+    let Some(file) = sources.get(span.source_id) else {
+        return message;
     };
 
     let line_number = span.line.max(1);
-    let line = file
-        .source
-        .lines()
+    let line = file.source.lines()
         .nth(line_number.saturating_sub(1))
         .unwrap_or("");
     let column = span.column.max(1);
-    let marker = format!(
-        "{}{}",
-        " ".repeat(column.saturating_sub(1)),
-        "^".repeat(span_width(span))
-    );
-
-    let location = if span.end_line > span.line {
-        format!(
-            "{}:{}:{}-{}:{}",
-            file.path.display(),
-            line_number,
-            column,
-            span.end_line,
-            span.end_column
-        )
+    let width = if span.end_line == span.line {
+        span.length.max(1).min(line.chars().count().saturating_sub(column - 1).max(1))
     } else {
-        format!("{}:{}:{}", file.path.display(), line_number, column)
+        1
     };
-
-    format!(
-        "{location}: {message}\n  {line_number} | {line}\n    | {marker}"
-    )
-}
-
-fn format_source_note(
-    sources: &[SourceFile],
-    span: rcl::lexer::Span,
-    label: String,
-) -> String {
-    let Some(file) = source_for_span(sources, span) else {
-        return format!("note: <unknown source>: {label}");
-    };
-    let line_number = span.line.max(1);
-    let line = file
-        .source
-        .lines()
-        .nth(line_number.saturating_sub(1))
-        .unwrap_or("");
-    let column = span.column.max(1);
     let marker = format!(
         "{}{}",
         " ".repeat(column.saturating_sub(1)),
-        "^".repeat(span_width(span))
+        "^".repeat(width),
     );
+
     format!(
-        "note: {}:{}:{}: {}\n  {} | {}\n    | {}",
+        "{}:{}:{}: {}\n  {} | {}\n    | {}",
         file.path.display(),
         line_number,
         column,
-        label,
+        message,
         line_number,
         line,
-        marker
+        marker,
     )
+}
+
+fn format_borrow_error(
+    sources: &[SourceFile],
+    error: rcl::borrowck::BorrowError,
+) -> String {
+    let mut text = format_source_error(sources, error.span, error.message);
+    if let Some((span, label)) = error.secondary {
+        text.push_str("\n  note: ");
+        text.push_str(&format_source_error(sources, span, label));
+    }
+    text
 }
 
 fn llvm_path(source: &str) -> PathBuf { Path::new(source).with_extension("ll") }
