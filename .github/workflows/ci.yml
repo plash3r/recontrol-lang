@@ -47,6 +47,8 @@ jobs:
         run: cargo run -p rcl -- run tests/programs/run-pass/enum_match.rcl
       - name: Verify payload enum construction and destructuring
         run: cargo run -p rcl -- run tests/programs/run-pass/payload_enum_match.rcl
+      - name: Verify break and continue control flow
+        run: cargo run -p rcl -- run tests/programs/run-pass/loop_control.rcl
       - name: Verify integer division by zero is deterministic
         shell: bash
         run: |
@@ -65,6 +67,7 @@ jobs:
             tests/programs/compile-fail/private-namespace/main.rcl
             tests/programs/compile-fail/non_exhaustive_match.rcl
             tests/programs/compile-fail/payload_enum_errors.rcl
+            tests/programs/compile-fail/loop_control_outside_loop.rcl
           )
           for file in "${files[@]}"; do
             if cargo run -p rcl -- check "$file"; then
