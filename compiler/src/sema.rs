@@ -383,6 +383,11 @@ impl SemanticAnalyzer {
                 self.check_block(body, env, return_type);
                 self.loop_depth -= 1;
             }
+            StmtKind::Loop { body } => {
+                self.loop_depth += 1;
+                self.check_block(body, env, return_type);
+                self.loop_depth -= 1;
+            }
             StmtKind::DoWhile { body, condition } => {
                 self.loop_depth += 1;
                 self.check_block(body, env, return_type);
