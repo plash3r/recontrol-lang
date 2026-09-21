@@ -255,7 +255,7 @@ impl<'a> Cx<'a> {
             if args.is_empty() { return self.err_result("print/println expects at least one argument"); }
             if args.len() == 1 {
                 if let Operand::Copy(place) | Operand::Move(place) = &args[0] {
-                    if matches!(self.operand_type(&args[0])?, Type::Array(_)) {
+                    if matches!(self.operand_type(&args[0])?, Type::Array { .. }) {
                         self.emit_print_array(place, *id == BUILTIN_PRINTLN_ID)?;
                         return Ok(String::new());
                     }
@@ -342,7 +342,7 @@ impl<'a> Cx<'a> {
     }
 
     fn emit_print_array(&mut self, place: &Place, newline: bool) -> Result<(), Vec<CodegenError>> {
-        let Type::Array(element_type) = self.place_type(place)? else {
+        let Type::Array { element: element_type, .. } = self.place_type(place)? else {
             return self.err_result("print array expects an array value");
         };
         let length = self.array_length(place)?;
@@ -457,8 +457,19 @@ impl<'a> Cx<'a> {
 
     fn array_length(&self, place: &Place) -> Result<usize, Vec<CodegenError>> {
         match place {
-            Place::Local(local) => self.array_lengths.get(local).copied().ok_or_else(|| vec![self.err("array length is unavailable")]),
-            _ => Err(vec![self.err("array length is unavailable for this expression")]),
+            Place::Local(local) => {
+                if let Some(length) = self.array_lengths.get(local).copied() {
+                    return Ok(length);
+                }
+                match self.locals.get(local) {
+                    Some(Type::Array { len, .. }) => Ok(*len),
+                    _ => Err(vec![self.err("array length is unavailable")]),
+                }
+            }
+            _ => match self.place_type(place)? {
+                Type::Array { len, .. } => Ok(len),
+                _ => Err(vec![self.err("array length is unavailable for this expression")]),
+            },
         }
     }
 
@@ -477,7 +488,7 @@ impl<'a> Cx<'a> {
                     .ok_or_else(|| vec![self.err("unknown struct field")])
             }
             Place::Index { base, .. } => match self.place_type(base)? {
-                Type::Array(inner) => Ok(*inner),
+                Type::Array { element, .. } => Ok(*element),
                 _ => self.err_result("index base is not an array"),
             },
         }
@@ -567,7 +578,7 @@ fn llvm_type(t:&Type)->String { match t {
     Type::I8|Type::U8=>"i8", Type::I16|Type::U16=>"i16", Type::I32|Type::U32|Type::Char=>"i32",
     Type::I64|Type::U64=>"i64", Type::I128|Type::U128=>"i128", Type::I256|Type::U256=>"i256",
     Type::F32=>"float",Type::F64=>"double",Type::F128=>"fp128",Type::Bool=>"i1",Type::Str|Type::Reference{..}=>"ptr",
-    Type::Unit=>"void",Type::Named(n)=>return format!("%{}",n),Type::Array(_)|Type::Unknown=>"ptr"
+    Type::Unit=>"void",Type::Named(n)=>return format!("%{}",n),Type::Array { .. }|Type::Unknown=>"ptr"
 }.into() }
 fn llvm_name(n:&str)->String { if n=="main"{"main".into()}else{format!("rcl_{n}")} }
 fn escape_bytes(b:&[u8])->String { let mut s=String::new(); for x in b { match x {92=>s.push_str("\\5C"),34=>s.push_str("\\22"),0=>s.push_str("\\00"),10=>s.push_str("\\0A"),13=>s.push_str("\\0D"),9=>s.push_str("\\09"),32..=126=>s.push(*x as char),_=>write!(s,"\\{:02X}",x).unwrap()} } s }
