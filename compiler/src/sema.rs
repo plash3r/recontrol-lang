@@ -14,11 +14,22 @@ pub struct SemanticError {
 struct FunctionSig {
     params: Vec<Type>,
     return_type: Type,
+    public: bool,
+    source_id: usize,
+}
+
+#[derive(Debug, Clone)]
+struct FieldInfo {
+    ty: Type,
+    public: bool,
+    source_id: usize,
 }
 
 #[derive(Debug, Clone)]
 struct StructInfo {
-    fields: HashMap<String, Type>,
+    fields: HashMap<String, FieldInfo>,
+    public: bool,
+    source_id: usize,
 }
 
 #[derive(Debug, Default)]
@@ -94,6 +105,8 @@ impl SemanticAnalyzer {
                         FunctionSig {
                             params: function.params.iter().map(|p| Type::from_ref(&p.ty)).collect(),
                             return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                            public: function.public,
+                            source_id: function.span.source_id,
                         },
                     );
                 }
@@ -104,11 +117,25 @@ impl SemanticAnalyzer {
                     }
                     let mut fields = HashMap::new();
                     for field in &structure.fields {
-                        if fields.insert(field.name.clone(), Type::from_ref(&field.ty)).is_some() {
+                        if fields.insert(
+                            field.name.clone(),
+                            FieldInfo {
+                                ty: Type::from_ref(&field.ty),
+                                public: field.public,
+                                source_id: field.span.source_id,
+                            },
+                        ).is_some() {
                             self.error_at(field.span, format!("duplicate field '{}.{}'", structure.name, field.name));
                         }
                     }
-                    self.structs.insert(structure.name.clone(), StructInfo { fields });
+                    self.structs.insert(
+                        structure.name.clone(),
+                        StructInfo {
+                            fields,
+                            public: structure.public,
+                            source_id: structure.span.source_id,
+                        },
+                    );
                 }
                 Item::Impl(implementation) => {
                     if !self.structs.contains_key(&implementation.type_name) {
@@ -134,6 +161,8 @@ impl SemanticAnalyzer {
                             FunctionSig {
                                 params,
                                 return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                                public: function.public,
+                                source_id: function.span.source_id,
                             },
                         ).is_some() {
                             self.error_at(function.span, format!("duplicate method '{}.{}'", key.0, key.1));
@@ -445,6 +474,9 @@ impl SemanticAnalyzer {
                 return Type::I32;
             }
             if let Some(signature) = self.functions.get(name).cloned() {
+                if signature.source_id != callee.span.source_id && !signature.public {
+                    self.error_at(callee.span, format!("function '{}' is private", name));
+                }
                 return self.signature(&signature, args, env, span);
             }
             self.error_at(callee.span, format!("unknown function '{}'", name));
@@ -462,6 +494,9 @@ impl SemanticAnalyzer {
                 _ => String::new(),
             };
             if let Some(signature) = self.methods.get(&(type_name.clone(), name.clone())).cloned() {
+                if signature.source_id != callee.span.source_id && !signature.public {
+                    self.error_at(callee.span, format!("method '{}.{}' is private", type_name, name));
+                }
                 let mut all = vec![object.as_ref().clone()];
                 all.extend_from_slice(args);
                 return self.signature(&signature, &all, env, span);
@@ -511,8 +546,14 @@ impl SemanticAnalyzer {
             _ => String::new(),
         };
         if let Some(structure) = self.structs.get(&type_name) {
-            if let Some(ty) = structure.fields.get(name) {
-                return ty.clone();
+            if structure.source_id != span.source_id && !structure.public {
+                self.error_at(span, format!("struct '{}' is private", type_name));
+            }
+            if let Some(field) = structure.fields.get(name) {
+                if field.source_id != span.source_id && !field.public {
+                    self.error_at(span, format!("field '{}.{}' is private", type_name, name));
+                }
+                return field.ty.clone();
             }
         }
         self.error_at(span, format!("unknown member '{}.{}'", type_name, name));
@@ -524,6 +565,9 @@ impl SemanticAnalyzer {
             self.error_at(span, format!("unknown struct '{}'", name));
             return Type::Unknown;
         };
+        if info.source_id != span.source_id && !info.public {
+            self.error_at(span, format!("struct '{}' is private", name));
+        }
         let mut seen = HashMap::new();
         for (field, expression) in fields {
             let actual = self.expr(expression, env);
@@ -531,11 +575,15 @@ impl SemanticAnalyzer {
                 self.error_at(expression.span, format!("duplicate field '{}.{}'", name, field));
             }
             match info.fields.get(field) {
-                Some(expected) if !self.compatible(expected, &actual) => {
-                    self.error_at(expression.span, format!("field '{}.{}' type mismatch", name, field));
+                Some(expected) => {
+                    if expected.source_id != expression.span.source_id && !expected.public {
+                        self.error_at(expression.span, format!("field '{}.{}' is private", name, field));
+                    }
+                    if !self.compatible(&expected.ty, &actual) {
+                        self.error_at(expression.span, format!("field '{}.{}' type mismatch", name, field));
+                    }
                 }
                 None => self.error_at(expression.span, format!("unknown field '{}.{}'", name, field)),
-                _ => {}
             }
         }
         for field in info.fields.keys() {
@@ -674,6 +722,23 @@ mod tests {
     #[test]
     fn else_if() {
         assert!(check("fn main(){if true{}else if false{}else{}}").is_ok());
+    }
+
+    #[test]
+    fn visibility_uses_source_ids() {
+        let source = "pub fn visible(){}\nfn hidden(){}\nfn local(){hidden()}";
+        let tokens = Lexer::with_source_id(source, 1).tokenize().unwrap();
+        let imported = Parser::new(tokens).parse().unwrap();
+
+        let caller_source = "fn main(){visible() hidden()}";
+        let tokens = Lexer::with_source_id(caller_source, 0).tokenize().unwrap();
+        let caller = Parser::new(tokens).parse().unwrap();
+
+        let mut items = imported.items;
+        items.extend(caller.items);
+        let errors = SemanticAnalyzer::check(&Program { items }).unwrap_err();
+        assert!(errors.iter().any(|error| error.message.contains("hidden") && error.message.contains("private")));
+        assert!(!errors.iter().any(|error| error.message.contains("visible") && error.message.contains("private")));
     }
 
     #[test]
