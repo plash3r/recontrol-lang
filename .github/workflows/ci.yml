@@ -33,3 +33,24 @@ jobs:
         run: cargo run -p rcl -- run examples/hpc_i256.rcl
       - name: Verify short-circuit execution
         run: cargo run -p rcl -- run tests/programs/run-pass/short_circuit.rcl
+      - name: Verify fixed arrays cross function boundaries
+        run: cargo run -p rcl -- run tests/programs/run-pass/array_parameter.rcl
+      - name: Verify literals wider than u128
+        run: cargo run -p rcl -- run tests/programs/run-pass/i256_wide_literal.rcl
+      - name: Verify integer division by zero is deterministic
+        shell: bash
+        run: |
+          if cargo run -p rcl -- run tests/programs/run-fail/divide_by_zero.rcl; then
+            echo "expected divide-by-zero program to fail" >&2
+            exit 1
+          fi
+      - name: Verify compile-fail programs
+        shell: bash
+        run: |
+          for file in             tests/programs/compile-fail/i256_overflow.rcl             tests/programs/compile-fail/borrow_conflict.rcl             tests/programs/compile-fail/import-error/main.rcl
+          do
+            if cargo run -p rcl -- check "$file"; then
+              echo "expected $file to fail" >&2
+              exit 1
+            fi
+          done
