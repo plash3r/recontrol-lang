@@ -67,6 +67,7 @@ rcl check [file.rcl]       Check a file or the current project
 rcl build [file.rcl]       Build a file or the current project
 rcl run [file.rcl]         Build and run a file or the current project
 rcl test                   Build and run tests/*.rcl in the current project
+rcl fmt [file.rcl]         Format a file or the current project entry
 rcl emit-llvm [file.rcl]   Emit LLVM IR for a file or project
 rcl new <name>             Create a new project
 rcl --version              Show compiler version
@@ -157,7 +158,21 @@ fn main() {
 }
 ~~~
 
-`math.rcl` is compiled as part of the same program, so its functions, structs, and `impl` blocks are available to the importing file. Imports are resolved relative to the file containing the `use` declaration. Cyclic imports and missing files are reported as compiler errors.
+`math.rcl` is compiled as part of the same program. Declarations are private to their source file by default; use `pub fn`, `pub struct`, `pub fn` on methods, and `pub` on struct fields to expose them to another imported file. Private helpers remain usable inside their own source file.
+
+For example, `math.rcl` can export:
+
+~~~rcl
+fn internal_helper(): i32 {
+    return 40
+}
+
+pub fn add(a: i32, b: i32): i32 {
+    return a + b
+}
+~~~
+
+Imports are resolved relative to the file containing the `use` declaration. Cyclic imports, missing files, and cross-file access to private declarations are reported as compiler errors with source locations.
 
 ## Compiler pipeline
 
