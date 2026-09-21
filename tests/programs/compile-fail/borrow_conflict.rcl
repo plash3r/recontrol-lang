@@ -1,0 +1,5 @@
+fn main() {
+    let mut value: i32 = 10
+    let guard = &mut value
+    value = 20
+}
