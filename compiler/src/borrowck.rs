@@ -8,19 +8,26 @@ use crate::types::Type;
 pub struct BorrowError {
     pub message: String,
     pub span: Span,
+    pub secondary: Option<(Span, String)>,
 }
 
 #[derive(Debug, Clone)]
-struct FunctionSig { params: Vec<Type> }
+struct FunctionSig {
+    params: Vec<Type>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BorrowKind { Shared, Mutable }
+enum BorrowKind {
+    Shared,
+    Mutable,
+}
 
 #[derive(Debug, Clone)]
 struct ActiveBorrow {
     kind: BorrowKind,
     scope: usize,
     holder: Option<String>,
+    origin: Span,
 }
 
 #[derive(Debug, Default)]
@@ -85,19 +92,37 @@ impl BorrowChecker {
                         checker.check_function(method, Some(&implementation.type_name));
                     }
                 }
-                Item::Struct(_) => {}
-                Item::Import(_) => {}
+                Item::Struct(_) | Item::Import(_) => {}
             }
         }
 
         if checker.errors.is_empty() { Ok(()) } else { Err(checker.errors) }
     }
 
-    fn error(&mut self, message: impl Into<String>) {
+    fn error_at(&mut self, span: Span, message: impl Into<String>) {
         self.errors.push(BorrowError {
             message: message.into(),
-            span: Span { line: 1, column: 1, length: 0 },
+            span,
+            secondary: None,
         });
+    }
+
+    fn conflict_at(&mut self, span: Span, target: &str, kind: BorrowKind, message: String) {
+        let secondary = self.active.get(target)
+            .and_then(|borrows| {
+                borrows.iter().find(|borrow| match kind {
+                    BorrowKind::Shared => borrow.kind == BorrowKind::Mutable,
+                    BorrowKind::Mutable => true,
+                })
+            })
+            .map(|borrow| {
+                let label = match borrow.kind {
+                    BorrowKind::Shared => "existing shared borrow starts here",
+                    BorrowKind::Mutable => "existing mutable borrow starts here",
+                };
+                (borrow.origin, label.to_string())
+            });
+        self.errors.push(BorrowError { message, span, secondary });
     }
 
     fn collect(&mut self, program: &Program) {
@@ -110,14 +135,14 @@ impl BorrowChecker {
                 }
                 Item::Impl(implementation) => {
                     for method in &implementation.methods {
-                        let params = method.params.iter().map(|p| {
-                            if p.name == "self" {
+                        let params = method.params.iter().map(|parameter| {
+                            if parameter.name == "self" {
                                 Type::Reference {
-                                    mutable: p.ty.reference == ReferenceKind::Mutable,
+                                    mutable: parameter.ty.reference == ReferenceKind::Mutable,
                                     inner: Box::new(Type::Named(implementation.type_name.clone())),
                                 }
                             } else {
-                                Type::from_ref(&p.ty)
+                                Type::from_ref(&parameter.ty)
                             }
                         }).collect();
                         self.methods.insert(
@@ -126,8 +151,7 @@ impl BorrowChecker {
                         );
                     }
                 }
-                Item::Struct(_) => {}
-                Item::Import(_) => {}
+                Item::Struct(_) | Item::Import(_) => {}
             }
         }
     }
@@ -184,11 +208,17 @@ impl BorrowChecker {
     }
 
     fn check_statement(&mut self, statement: &Stmt, env: &mut Env) {
-        match statement {
-            Stmt::Let { name, mutable, initializer, .. } => {
+        match &statement.kind {
+            StmtKind::Let { name, mutable, initializer, .. } => {
                 if let Some(expression) = initializer {
                     if let Some((target, kind)) = self.borrow_expression(expression) {
-                        self.create_borrow(target, kind, Some(name.clone()), env);
+                        if kind == BorrowKind::Mutable && !self.is_mutable_target(&target, env) {
+                            self.error_at(
+                                expression.span,
+                                format!("cannot mutably borrow immutable variable '{}'", target),
+                            );
+                        }
+                        self.create_borrow(target, kind, Some(name.clone()), expression.span, env);
                         env.define(name.clone(), *mutable, true);
                         return;
                     }
@@ -196,24 +226,28 @@ impl BorrowChecker {
                 }
                 env.define(name.clone(), *mutable, false);
             }
-            Stmt::Expr(expression) => self.check_expression(expression, env),
-            Stmt::Return(expression) => {
-                if let Some(expression) = expression { self.check_expression(expression, env); }
+            StmtKind::Expr(expression) => self.check_expression(expression, env),
+            StmtKind::Return(expression) => {
+                if let Some(expression) = expression {
+                    self.check_expression(expression, env);
+                }
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            StmtKind::If { condition, then_branch, else_branch } => {
                 self.check_expression(condition, env);
                 self.check_block_body(then_branch, env);
-                if let Some(branch) = else_branch { self.check_statement(branch, env); }
+                if let Some(branch) = else_branch {
+                    self.check_statement(branch, env);
+                }
             }
-            Stmt::While { condition, body } => {
+            StmtKind::While { condition, body } => {
                 self.check_expression(condition, env);
                 self.check_block_body(body, env);
             }
-            Stmt::DoWhile { body, condition } => {
+            StmtKind::DoWhile { body, condition } => {
                 self.check_block_body(body, env);
                 self.check_expression(condition, env);
             }
-            Stmt::For { initializer, condition, update, body } => {
+            StmtKind::For { initializer, condition, update, body } => {
                 self.enter_scope(env);
                 if let Some(initializer) = initializer { self.check_statement(initializer, env); }
                 if let Some(condition) = condition { self.check_expression(condition, env); }
@@ -221,89 +255,94 @@ impl BorrowChecker {
                 self.check_block_body(body, env);
                 self.leave_scope(env);
             }
-            Stmt::Block(block) => self.check_block_body(block, env),
+            StmtKind::Block(block) => self.check_block_body(block, env),
         }
     }
 
     fn check_expression(&mut self, expression: &Expr, env: &Env) {
-        match expression {
-            Expr::Identifier(name) => {
-                self.check_read(name);
-            }
-            Expr::Assignment { target, value, .. } => {
+        match &expression.kind {
+            ExprKind::Identifier(name) => self.check_read(name, expression.span),
+            ExprKind::Assignment { target, value, .. } => {
                 if let Some(name) = self.root_identifier(target) {
-                    self.check_mutation(&name);
+                    self.check_mutation(&name, target.span);
                 }
                 self.check_expression(value, env);
             }
-            Expr::Call { callee, args } => self.check_call(callee, args, env),
-            Expr::Member { object, .. } => self.check_expression(object, env),
-            Expr::Postfix { expr, .. } => {
-                if let Some(name) = self.root_identifier(expr) { self.check_mutation(&name); }
+            ExprKind::Call { callee, args } => self.check_call(callee, args, env),
+            ExprKind::Member { object, .. } => self.check_expression(object, env),
+            ExprKind::Postfix { expr, .. } => {
+                if let Some(name) = self.root_identifier(expr) {
+                    self.check_mutation(&name, expr.span);
+                }
                 self.check_expression(expr, env);
             }
-            Expr::Unary { op, expr } => match op {
+            ExprKind::Unary { op, expr } => match op {
                 UnaryOp::BorrowShared => {
                     if let Some(target) = self.root_identifier(expr) {
-                        self.create_borrow(target, BorrowKind::Shared, None, env);
+                        self.create_borrow(target, BorrowKind::Shared, None, expression.span, env);
                     } else {
-                        self.error("cannot borrow temporary expression");
+                        self.error_at(expression.span, "cannot borrow temporary expression");
                     }
                 }
                 UnaryOp::BorrowMutable => {
                     if let Some(target) = self.root_identifier(expr) {
                         if !self.is_mutable_target(&target, env) {
-                            self.error(format!("cannot mutably borrow immutable variable '{}'", target));
+                            self.error_at(
+                                expression.span,
+                                format!("cannot mutably borrow immutable variable '{}'", target),
+                            );
                         }
-                        self.create_borrow(target, BorrowKind::Mutable, None, env);
+                        self.create_borrow(target, BorrowKind::Mutable, None, expression.span, env);
                     } else {
-                        self.error("cannot mutably borrow temporary expression");
+                        self.error_at(expression.span, "cannot mutably borrow temporary expression");
                     }
                 }
                 _ => self.check_expression(expr, env),
             },
-            Expr::Binary { left, right, .. } => {
+            ExprKind::Binary { left, right, .. } => {
                 self.check_expression(left, env);
                 self.check_expression(right, env);
             }
-            Expr::Grouping(inner) => self.check_expression(inner, env),
-            Expr::StructLiteral { fields, .. } => {
+            ExprKind::Grouping(inner) => self.check_expression(inner, env),
+            ExprKind::StructLiteral { fields, .. } => {
                 for (_, value) in fields { self.check_expression(value, env); }
             }
-            Expr::Array(values) => for value in values { self.check_expression(value, env); },
-            Expr::Index { object, index } => {
+            ExprKind::Array(values) => {
+                for value in values { self.check_expression(value, env); }
+            }
+            ExprKind::Index { object, index } => {
                 self.check_expression(object, env);
                 self.check_expression(index, env);
             }
-            Expr::Literal(_) => {}
+            ExprKind::Literal(_) => {}
         }
     }
 
     fn check_call(&mut self, callee: &Expr, args: &[Expr], env: &Env) {
-        if let Expr::Identifier(name) = callee {
+        if let ExprKind::Identifier(name) = &callee.kind {
             if name == "print" || name == "println" || name == "typeof" || name == "len" {
-                for arg in args { self.check_expression(arg, env); }
+                for argument in args { self.check_expression(argument, env); }
                 return;
             }
-            if let Some(sig) = self.functions.get(name).cloned() {
-                self.check_signature(&sig, args, env);
+            if let Some(signature) = self.functions.get(name).cloned() {
+                self.check_signature(&signature, args, env);
                 return;
             }
         }
 
-        if let Expr::Member { object, name } = callee {
+        if let ExprKind::Member { object, name } = &callee.kind {
             self.check_expression(object, env);
             let type_name = self.object_type_name(object);
-            if let Some(sig) = self.methods.get(&(type_name, name.clone())).cloned() {
+            if let Some(signature) = self.methods.get(&(type_name, name.clone())).cloned() {
                 let mut all = vec![object.as_ref().clone()];
                 all.extend_from_slice(args);
-                self.check_signature(&sig, &all, env);
+                self.check_signature(&signature, &all, env);
                 return;
             }
         }
 
         self.check_expression(callee, env);
-        for arg in args { self.check_expression(arg, env); }
+        for argument in args { self.check_expression(argument, env); }
     }
 
     fn check_signature(&mut self, signature: &FunctionSig, args: &[Expr], env: &Env) {
@@ -317,18 +356,23 @@ impl BorrowChecker {
 
             if let Type::Reference { mutable, .. } = expected {
                 let Some(name) = self.borrow_target(argument) else {
-                    self.error("reference arguments require a variable, field, or index expression");
+                    self.error_at(argument.span, "reference arguments require a variable, field, or index expression");
                     continue;
                 };
                 let kind = if *mutable { BorrowKind::Mutable } else { BorrowKind::Shared };
 
                 if *mutable && !self.is_mutable_target(&name, env) {
-                    self.error(format!("cannot mutably borrow immutable variable '{}'", name));
+                    self.error_at(
+                        argument.span,
+                        format!("cannot mutably borrow immutable variable '{}'", name),
+                    );
                 }
-                if !self.can_borrow(&name, kind) {
-                    self.report_conflict(&name, kind);
+                if self.can_borrow(&name, kind) {
+                    self.create_borrow(name.clone(), kind, None, argument.span, env);
+                    temporary.push((name, kind));
+                } else {
+                    self.report_conflict(&name, kind, argument.span);
                 }
-                temporary.push((name, kind));
             } else {
                 self.check_expression(argument, env);
             }
@@ -340,8 +384,8 @@ impl BorrowChecker {
     }
 
     fn borrow_target(&self, expression: &Expr) -> Option<String> {
-        match expression {
-            Expr::Unary {
+        match &expression.kind {
+            ExprKind::Unary {
                 op: UnaryOp::BorrowShared | UnaryOp::BorrowMutable,
                 expr,
             } => self.root_identifier(expr),
@@ -350,24 +394,32 @@ impl BorrowChecker {
     }
 
     fn borrow_expression(&self, expression: &Expr) -> Option<(String, BorrowKind)> {
-        match expression {
-            Expr::Unary { op: UnaryOp::BorrowShared, expr } =>
+        match &expression.kind {
+            ExprKind::Unary { op: UnaryOp::BorrowShared, expr } =>
                 self.root_identifier(expr).map(|name| (name, BorrowKind::Shared)),
-            Expr::Unary { op: UnaryOp::BorrowMutable, expr } =>
+            ExprKind::Unary { op: UnaryOp::BorrowMutable, expr } =>
                 self.root_identifier(expr).map(|name| (name, BorrowKind::Mutable)),
             _ => None,
         }
     }
 
-    fn create_borrow(&mut self, target: String, kind: BorrowKind, holder: Option<String>, env: &Env) {
+    fn create_borrow(
+        &mut self,
+        target: String,
+        kind: BorrowKind,
+        holder: Option<String>,
+        origin: Span,
+        env: &Env,
+    ) {
         if !self.can_borrow(&target, kind) {
-            self.report_conflict(&target, kind);
+            self.report_conflict(&target, kind, origin);
             return;
         }
         self.active.entry(target).or_default().push(ActiveBorrow {
             kind,
             scope: self.scope,
             holder: holder.clone(),
+            origin,
         });
         if let Some(holder) = holder {
             let _ = env.is_reference(&holder);
@@ -379,7 +431,9 @@ impl BorrowChecker {
             if let Some(index) = borrows.iter().rposition(|borrow| borrow.kind == kind && borrow.holder.is_none()) {
                 borrows.remove(index);
             }
-            if borrows.is_empty() { self.active.remove(target); }
+            if borrows.is_empty() {
+                self.active.remove(target);
+            }
         }
     }
 
@@ -387,42 +441,58 @@ impl BorrowChecker {
         match self.active.get(target) {
             None => true,
             Some(borrows) => match kind {
-                BorrowKind::Shared => borrows.iter().all(|b| b.kind == BorrowKind::Shared),
+                BorrowKind::Shared => borrows.iter().all(|borrow| borrow.kind == BorrowKind::Shared),
                 BorrowKind::Mutable => borrows.is_empty(),
-            }
+            },
         }
     }
 
-    fn report_conflict(&mut self, target: &str, kind: BorrowKind) {
+    fn report_conflict(&mut self, target: &str, kind: BorrowKind, span: Span) {
         let message = match kind {
-            BorrowKind::Shared => format!("cannot borrow '{}' as shared because it is mutably borrowed", target),
-            BorrowKind::Mutable => format!("cannot mutably borrow '{}' because it is already borrowed", target),
-        };
-        self.error(message);
-    }
-
-    fn check_read(&mut self, name: &str) {
-        if let Some(borrows) = self.active.get(name) {
-            if borrows.iter().any(|b| b.kind == BorrowKind::Mutable) {
-                self.error(format!("cannot read '{}' because it is mutably borrowed", name));
+            BorrowKind::Shared => {
+                format!("cannot borrow '{}' as shared because it is mutably borrowed", target)
             }
+            BorrowKind::Mutable => {
+                format!("cannot mutably borrow '{}' because it is already borrowed", target)
+            }
+        };
+        self.conflict_at(span, target, kind, message);
+    }
+
+    fn check_read(&mut self, name: &str, span: Span) {
+        if self.active.get(name)
+            .map(|borrows| borrows.iter().any(|borrow| borrow.kind == BorrowKind::Mutable))
+            .unwrap_or(false)
+        {
+            self.conflict_at(
+                span,
+                name,
+                BorrowKind::Shared,
+                format!("cannot read '{}' because it is mutably borrowed", name),
+            );
         }
     }
 
-    fn check_mutation(&mut self, name: &str) {
-        if let Some(borrows) = self.active.get(name) {
-            self.error(format!("cannot modify '{}' because it is borrowed", name));
+    fn check_mutation(&mut self, name: &str, span: Span) {
+        if self.active.get(name).map(|borrows| !borrows.is_empty()).unwrap_or(false) {
+            self.conflict_at(
+                span,
+                name,
+                BorrowKind::Mutable,
+                format!("cannot modify '{}' because it is borrowed", name),
+            );
         }
     }
 
-    fn is_mutable_target(&self, name: &str, env: &Env) -> bool { env.is_mutable(name) }
+    fn is_mutable_target(&self, name: &str, env: &Env) -> bool {
+        env.is_mutable(name)
+    }
 
     fn root_identifier(&self, expression: &Expr) -> Option<String> {
-        match expression {
-            Expr::Identifier(name) => Some(name.clone()),
-            Expr::Member { object, .. } |
-            Expr::Index { object, .. } => self.root_identifier(object),
-            Expr::Grouping(inner) => self.root_identifier(inner),
+        match &expression.kind {
+            ExprKind::Identifier(name) => Some(name.clone()),
+            ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => self.root_identifier(object),
+            ExprKind::Grouping(inner) => self.root_identifier(inner),
             _ => None,
         }
     }
@@ -446,49 +516,43 @@ mod tests {
 
     #[test]
     fn shared_borrows_live_until_scope_end() {
-        let source = "fn main(){let x=10\nlet a=&x\nlet b=&x}";
-        assert!(check(source).is_ok());
+        assert!(check("fn main(){let x=10\nlet a=&x\nlet b=&x}").is_ok());
     }
 
     #[test]
     fn mutable_borrow_blocks_mutation() {
-        let source = "fn main(){let mut x=10\nlet r=&mut x\nx=20}";
-        assert!(check(source).is_err());
+        let errors = check("fn main(){let mut x=10\nlet r=&mut x\nx=20}").unwrap_err();
+        assert!(errors[0].span.line >= 2);
+        assert!(errors.iter().any(|error| error.secondary.is_some()));
     }
 
     #[test]
     fn shared_borrow_blocks_mutation() {
-        let source = "fn main(){let mut x=10\nlet r=&x\nx=20}";
-        assert!(check(source).is_err());
+        assert!(check("fn main(){let mut x=10\nlet r=&x\nx=20}").is_err());
     }
 
     #[test]
     fn mutable_borrows_are_exclusive() {
-        let source = "fn main(){let mut x=10\nlet a=&mut x\nlet b=&mut x}";
-        assert!(check(source).is_err());
+        assert!(check("fn main(){let mut x=10\nlet a=&mut x\nlet b=&mut x}").is_err());
     }
 
     #[test]
     fn mutable_borrow_blocks_read() {
-        let source = "fn main(){let mut x=10\nlet r=&mut x\nprintln(x)}";
-        assert!(check(source).is_err());
+        assert!(check("fn main(){let mut x=10\nlet r=&mut x\nprintln(x)}").is_err());
     }
 
     #[test]
     fn borrow_ends_with_scope() {
-        let source = "fn main(){let mut x=10\n{let r=&x}\nx=20}";
-        assert!(check(source).is_ok());
+        assert!(check("fn main(){let mut x=10\n{let r=&x}\nx=20}").is_ok());
     }
 
     #[test]
     fn mutable_reference_requires_mut_variable() {
-        let source = "fn touch(value: &mut i32){} fn main(){\nlet value=10\ntouch(value)\n}";
-        assert!(check(source).is_err());
+        assert!(check("fn touch(value: &mut i32){} fn main(){\nlet value=10\ntouch(value)\n}").is_err());
     }
 
     #[test]
     fn mutable_reference_accepts_mut_variable() {
-        let source = "fn touch(value: &mut i32){} fn main(){\nlet mut value=10\ntouch(value)\n}";
-        assert!(check(source).is_ok());
+        assert!(check("fn touch(value: &mut i32){} fn main(){\nlet mut value=10\ntouch(value)\n}").is_ok());
     }
 }
