@@ -194,8 +194,11 @@ impl MirMoveAnalyzer {
                     Self::check_operand(function, block, op, state, errors);
                 }
             }
-            Rvalue::EnumVariant { .. } => {}
-            Rvalue::EnumTag { operand } => Self::check_operand(function, block, operand, state, errors),
+            Rvalue::EnumVariant { values, .. } => {
+                for operand in values { Self::check_operand(function, block, operand, state, errors); }
+            }
+            Rvalue::EnumTag { operand } | Rvalue::EnumPayload { operand, .. } =>
+                Self::check_operand(function, block, operand, state, errors),
             Rvalue::Array(values) => {
                 for op in values {
                     Self::check_operand(function, block, op, state, errors);
