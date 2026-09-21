@@ -22,7 +22,7 @@ struct Cx<'a> {
 
 impl LlvmBackend {
     pub fn emit(program: &MirProgram) -> Result<String, Vec<CodegenError>> {
-        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\ndeclare void @rcl_print_i8(i8)\ndeclare void @rcl_println_i8(i8)\ndeclare void @rcl_print_i32(i32)\ndeclare void @rcl_println_i32(i32)\ndeclare void @rcl_check_bounds_i32(i32, i32)\n\n");
+        let mut module = String::from("; Recontrol Lang LLVM IR\nsource_filename = \"recontrol\"\n\ndeclare void @rcl_println(ptr)\ndeclare void @rcl_print(ptr)\ndeclare void @rcl_print_i8(i8)\ndeclare void @rcl_println_i8(i8)\ndeclare void @rcl_print_i32(i32)\ndeclare void @rcl_println_i32(i32)\ndeclare void @rcl_check_bounds_i32(i32, i32)\ndeclare void @rcl_check_divisor(i32)\ndeclare void @rcl_check_div_overflow(i32)\n\n");
         let mut strings = Vec::new();
         let mut functions = String::new();
         let mut errors = Vec::new();
@@ -210,6 +210,27 @@ impl<'a> Cx<'a> {
 
     fn binary(&mut self, l: &Operand, op: BinaryOp, r: &Operand) -> Result<String, Vec<CodegenError>> {
         let a=self.operand(l)?; let b=self.operand(r)?; let ty=self.operand_type(l)?; let t=self.tmp(); let q=llvm_type(&ty);
+        if ty.is_integer() && matches!(op, BinaryOp::Divide | BinaryOp::Modulo) {
+            let zero = self.tmp();
+            let zero_i32 = self.tmp();
+            writeln!(self.pending, "  %{zero} = icmp eq {q} {b}, 0").unwrap();
+            writeln!(self.pending, "  %{zero_i32} = zext i1 %{zero} to i32").unwrap();
+            writeln!(self.pending, "  call void @rcl_check_divisor(i32 %{zero_i32})").unwrap();
+
+            if !unsigned(&ty) {
+                let bits = integer_bits(&ty).unwrap_or(32);
+                let min = format!("-{}", decimal_pow2(bits - 1));
+                let is_min = self.tmp();
+                let is_neg_one = self.tmp();
+                let overflow = self.tmp();
+                let overflow_i32 = self.tmp();
+                writeln!(self.pending, "  %{is_min} = icmp eq {q} {a}, {min}").unwrap();
+                writeln!(self.pending, "  %{is_neg_one} = icmp eq {q} {b}, -1").unwrap();
+                writeln!(self.pending, "  %{overflow} = and i1 %{is_min}, %{is_neg_one}").unwrap();
+                writeln!(self.pending, "  %{overflow_i32} = zext i1 %{overflow} to i32").unwrap();
+                writeln!(self.pending, "  call void @rcl_check_div_overflow(i32 %{overflow_i32})").unwrap();
+            }
+        }
         let s=if is_float(&ty) {
             match op {
                 BinaryOp::Add=>format!("fadd {q} {a}, {b}"), BinaryOp::Subtract=>format!("fsub {q} {a}, {b}"),
@@ -571,6 +592,24 @@ fn number_type(n:&str)->Type {
             "f32"=>Type::F32,"f64"=>Type::F64,"f128"=>Type::F128,_=>Type::I32 } }
     }
     if l.contains('.') { Type::F64 } else { Type::I32 }
+}
+fn integer_bits(t:&Type)->Option<u32> { match t {
+    Type::I8|Type::U8=>Some(8), Type::I16|Type::U16=>Some(16), Type::I32|Type::U32=>Some(32),
+    Type::I64|Type::U64=>Some(64), Type::I128|Type::U128=>Some(128), Type::I256|Type::U256=>Some(256),
+    _=>None,
+} }
+fn decimal_pow2(exp:u32)->String {
+    let mut digits=vec![1u8];
+    for _ in 0..exp {
+        let mut carry=0u16;
+        for digit in &mut digits {
+            let value=(*digit as u16)*2+carry;
+            *digit=(value%10) as u8;
+            carry=value/10;
+        }
+        while carry>0 { digits.push((carry%10) as u8); carry/=10; }
+    }
+    digits.iter().rev().map(|d| char::from(b'0'+*d)).collect()
 }
 fn is_float(t:&Type)->bool { matches!(t,Type::F32|Type::F64|Type::F128) }
 fn unsigned(t:&Type)->bool { matches!(t,Type::U8|Type::U16|Type::U32|Type::U64|Type::U128|Type::U256) }
