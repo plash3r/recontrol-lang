@@ -85,7 +85,7 @@ impl Parser {
             loop {
                 if self.check(TokenKind::Ampersand) {
                     let reference = if self.match_kind(TokenKind::Ampersand) {
-                        if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+                        if self.peek().kind == TokenKind::Mut {
                             self.advance();
                             ReferenceKind::Mutable
                         } else {
@@ -264,7 +264,7 @@ impl Parser {
 
     fn parse_type(&mut self) -> Result<TypeRef, ParseError> {
         let reference = if self.match_kind(TokenKind::Ampersand) {
-            if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+            if self.peek().kind == TokenKind::Mut {
                 self.advance();
                 ReferenceKind::Mutable
             } else {
@@ -347,7 +347,7 @@ impl Parser {
             TokenKind::Plus => Some(UnaryOp::Plus),
             TokenKind::Ampersand => {
                 self.advance();
-                if self.peek().kind == TokenKind::Identifier && self.peek().lexeme == "mut" {
+                if self.peek().kind == TokenKind::Mut {
                     self.advance();
                     Some(UnaryOp::BorrowMutable)
                 } else {
@@ -484,6 +484,15 @@ impl Parser {
             return Ok(());
         }
         if self.check(TokenKind::RightBrace) || self.check(TokenKind::Eof) { return Ok(()); }
+        if matches!(
+            self.peek().kind,
+            TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do | TokenKind::For |
+            TokenKind::Return | TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
+            TokenKind::String | TokenKind::True | TokenKind::False | TokenKind::Bang | TokenKind::Minus |
+            TokenKind::Plus | TokenKind::Ampersand | TokenKind::LeftBracket | TokenKind::LeftParen
+        ) {
+            return Ok(());
+        }
         Err(self.error_here("expected end of statement"))
     }
 
