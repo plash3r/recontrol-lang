@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,7 +26,8 @@ struct SourceFile {
 
 fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
     let mut sources = Vec::new();
-    let program = load_program(Path::new(path), &mut Vec::new(), &mut sources)?;
+    let mut loaded = HashMap::new();
+    let (program, _) = load_program(Path::new(path), &mut Vec::new(), &mut sources, &mut loaded)?;
 
     SemanticAnalyzer::check(&program).map_err(|errors| {
         format_errors(errors.into_iter()
@@ -59,9 +61,11 @@ fn load_program(
     path: &Path,
     stack: &mut Vec<PathBuf>,
     sources: &mut Vec<SourceFile>,
-) -> Result<Program, String> {
+    loaded: &mut HashMap<PathBuf, usize>,
+) -> Result<(Program, usize), String> {
     let canonical = path.canonicalize()
         .map_err(|e| format!("rcl: cannot resolve {}: {e}", path.display()))?;
+
     if let Some(index) = stack.iter().position(|item| item == &canonical) {
         let mut cycle = stack[index..]
             .iter()
@@ -71,6 +75,10 @@ fn load_program(
         return Err(format!("rcl: cyclic import: {}", cycle.join(" -> ")));
     }
 
+    if let Some(source_id) = loaded.get(&canonical).copied() {
+        return Ok((Program { items: Vec::new() }, source_id));
+    }
+
     let source = fs::read_to_string(&canonical)
         .map_err(|e| format!("rcl: cannot read {}: {e}", canonical.display()))?;
     let source_id = sources.len();
@@ -78,6 +86,7 @@ fn load_program(
         path: canonical.clone(),
         source: source.clone(),
     });
+    loaded.insert(canonical.clone(), source_id);
 
     let tokens = Lexer::with_source_id(&source, source_id).tokenize()
         .map_err(|errors| format_errors(
@@ -96,18 +105,22 @@ fn load_program(
     let mut items = Vec::new();
     for item in program.items {
         match item {
-            Item::Import(import) => {
+            Item::Import(mut import) => {
                 let import_path = resolve_import_path(
                     canonical.parent().unwrap_or(Path::new(".")),
                     &import.path,
                 );
-                items.extend(load_program(&import_path, stack, sources)?.items);
+                let (imported, target_source_id) =
+                    load_program(&import_path, stack, sources, loaded)?;
+                import.target_source_id = Some(target_source_id);
+                items.push(Item::Import(import));
+                items.extend(imported.items);
             }
             item => items.push(item),
         }
     }
     stack.pop();
-    Ok(Program { items })
+    Ok((Program { items }, source_id))
 }
 
 fn resolve_import_path(base: &Path, import: &str) -> PathBuf {
