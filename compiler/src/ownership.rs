@@ -47,7 +47,7 @@ impl Env {
 pub struct OwnershipChecker {
     functions: HashMap<(usize, String), FunctionSig>,
     methods: HashMap<(usize, String, String), FunctionSig>,
-    enums: HashMap<(usize, String), ()>,
+    enums: HashMap<(usize, String), Vec<(String, Vec<Type>)>>,
     imports: HashMap<usize, Vec<(Option<String>, usize)>>,
     errors: Vec<OwnershipError>,
 }
@@ -127,7 +127,12 @@ impl OwnershipChecker {
                 Item::Enum(definition) => {
                     self.enums.insert(
                         (definition.span.source_id, definition.name.clone()),
-                        (),
+                        definition.variants.iter().map(|variant| {
+                            (
+                                variant.name.clone(),
+                                variant.payload.iter().map(Type::from_ref).collect(),
+                            )
+                        }).collect(),
                     );
                 }
                 Item::Struct(_) => {}
@@ -202,9 +207,26 @@ impl OwnershipChecker {
                 env.pop();
             }
             StmtKind::Match { value, arms } => {
-                self.expr(value, env, false);
+                self.expr(value, env, true);
                 for arm in arms {
-                    self.check_block(&arm.body, env);
+                    env.push();
+                    if let Some(payload) = self.resolve_enum_variant(
+                        arm.span.source_id,
+                        &arm.enum_name,
+                        &arm.variant,
+                    ) {
+                        for (index, binding) in arm.bindings.iter().enumerate() {
+                            if binding == "_" { continue; }
+                            env.define(
+                                binding.clone(),
+                                payload.get(index).cloned().unwrap_or(Type::Unknown),
+                            );
+                        }
+                    }
+                    for statement in &arm.body.statements {
+                        self.check_stmt(statement, env);
+                    }
+                    env.pop();
                 }
             }
             StmtKind::Block(block) => self.check_block(block, env),
@@ -316,6 +338,23 @@ impl OwnershipChecker {
             .any(|(_, target)| self.enums.contains_key(&(*target, name.to_string())))
     }
 
+    fn resolve_enum_variant(&self, source_id: usize, enum_name: &str, variant: &str) -> Option<Vec<Type>> {
+        if let Some(variants) = self.enums.get(&(source_id, enum_name.to_string())) {
+            if let Some((_, payload)) = variants.iter().find(|(name, _)| name == variant) {
+                return Some(payload.clone());
+            }
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .find_map(|(_, target)| self.enums
+                .get(&(*target, enum_name.to_string()))
+                .and_then(|variants| variants.iter()
+                    .find(|(name, _)| name == variant)
+                    .map(|(_, payload)| payload.clone())))
+    }
+
     fn namespace_target(&self, source_id: usize, alias: &str) -> Option<usize> {
         self.imports.get(&source_id)
             .and_then(|imports| imports.iter()
@@ -358,6 +397,16 @@ impl OwnershipChecker {
                     {
                         return self.check_signature(&signature, args, env);
                     }
+                }
+
+                if let Some(payload) =
+                    self.resolve_enum_variant(callee.span.source_id, namespace, name)
+                {
+                    for (index, argument) in args.iter().enumerate() {
+                        let by_ref = matches!(payload.get(index), Some(Type::Reference { .. }));
+                        self.expr(argument, env, !by_ref);
+                    }
+                    return Type::Named(namespace.clone());
                 }
             }
 
