@@ -39,6 +39,8 @@ jobs:
         run: cargo run -p rcl -- run tests/programs/run-pass/array_parameter.rcl
       - name: Verify public imported declarations
         run: cargo run -p rcl -- run tests/programs/run-pass/public-import/main.rcl
+      - name: Verify namespace aliases and duplicate exported names
+        run: cargo run -p rcl -- run tests/programs/run-pass/namespaces/main.rcl
       - name: Verify literals wider than u128
         run: cargo run -p rcl -- run tests/programs/run-pass/i256_wide_literal.rcl
       - name: Verify integer division by zero is deterministic
@@ -56,6 +58,7 @@ jobs:
             tests/programs/compile-fail/borrow_conflict.rcl
             tests/programs/compile-fail/import-error/main.rcl
             tests/programs/compile-fail/private-import/main.rcl
+            tests/programs/compile-fail/private-namespace/main.rcl
           )
           for file in "${files[@]}"; do
             if cargo run -p rcl -- check "$file"; then
