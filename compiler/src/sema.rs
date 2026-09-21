@@ -545,7 +545,7 @@ impl SemanticAnalyzer {
             },
             _ => String::new(),
         };
-        if let Some(structure) = self.structs.get(&type_name) {
+        if let Some(structure) = self.structs.get(&type_name).cloned() {
             if structure.source_id != span.source_id && !structure.public {
                 self.error_at(span, format!("struct '{}' is private", type_name));
             }
