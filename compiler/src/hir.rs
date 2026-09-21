@@ -102,9 +102,10 @@ pub struct HirLowerer {
     structs: Vec<HirStruct>,
     scopes: Vec<HashMap<String, LocalId>>,
     local_types: HashMap<LocalId, Type>,
-    function_ids: HashMap<String, FunctionId>,
+    function_ids: HashMap<(usize, String), FunctionId>,
     function_returns: HashMap<FunctionId, Type>,
-    method_ids: HashMap<(String, String), FunctionId>,
+    method_ids: HashMap<(usize, String, String), FunctionId>,
+    imports: HashMap<usize, Vec<(Option<String>, usize)>>,
 }
 
 impl HirLowerer {
@@ -119,22 +120,49 @@ impl HirLowerer {
             function_ids: HashMap::new(),
             function_returns: HashMap::new(),
             method_ids: HashMap::new(),
+            imports: HashMap::new(),
         };
 
         for item in &program.items {
+            if let ast::Item::Import(import) = item {
+                if let Some(target_source_id) = import.target_source_id {
+                    lowerer.imports
+                        .entry(import.span.source_id)
+                        .or_default()
+                        .push((import.alias.clone(), target_source_id));
+                }
+            }
+        }
+
+        for item in &program.items {
             match item {
-                ast::Item::Function(f) => {
+                ast::Item::Function(function) => {
                     let id = lowerer.next_function;
-                    lowerer.function_ids.insert(f.name.clone(), id);
-                    lowerer.function_returns.insert(id, f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit));
+                    lowerer.function_ids.insert(
+                        (function.span.source_id, function.name.clone()),
+                        id,
+                    );
+                    lowerer.function_returns.insert(
+                        id,
+                        function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                    );
                     lowerer.next_function += 1;
                 }
-                ast::Item::Impl(i) => {
-                    for f in &i.methods {
+                ast::Item::Impl(implementation) => {
+                    for function in &implementation.methods {
                         let id = lowerer.next_function;
-                        lowerer.function_ids.insert(f.name.clone(), id);
-                        lowerer.function_returns.insert(id, f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit));
-                        lowerer.method_ids.insert((i.type_name.clone(), f.name.clone()), id);
+                        lowerer.function_returns.insert(
+                            id,
+                            function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
+                        );
+                        lowerer.method_ids.insert(
+                            (
+                                implementation.span.source_id,
+                                implementation.type_name.clone(),
+                                function.name.clone(),
+                            ),
+                            id,
+                        );
                         lowerer.next_function += 1;
                     }
                 }
@@ -204,9 +232,14 @@ impl HirLowerer {
         body.locals.splice(0..0, locals);
 
         self.scopes.pop();
+        let lowered_name = if function.span.source_id == 0 {
+            function.name.clone()
+        } else {
+            format!("m{}_{}", function.span.source_id, function.name)
+        };
         self.functions.push(HirFunction {
             id,
-            name: function.name.clone(),
+            name: lowered_name,
             params,
             return_type: function.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit),
             body,
@@ -281,7 +314,7 @@ impl HirLowerer {
                     HirExpr { ty: Type::Str, kind: HirExprKind::Function(BUILTIN_TYPEOF_ID) }
                 } else if name == "len" {
                     HirExpr { ty: Type::I32, kind: HirExprKind::Function(BUILTIN_LEN_ID) }
-                } else if let Some(id) = self.function_ids.get(name).copied() {
+                } else if let Some(id) = self.resolve_function_id(expr.span.source_id, name) {
                     HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }
                 } else {
                     let local = self.local_id(name);
@@ -315,25 +348,34 @@ impl HirLowerer {
             }
             ast::ExprKind::Call { callee, args } => {
                 let (callee, args) = if let ast::ExprKind::Member { object, name } = &callee.kind {
-                    let object = self.lower_expr(object);
-                    if let Type::Named(type_name) = &object.ty {
-                        if let Some(id) = self.method_ids.get(&(type_name.clone(), name.clone())).copied() {
-                            let self_ref = HirExpr {
-                                ty: Type::Reference { mutable: false, inner: Box::new(object.ty.clone()) },
-                                kind: HirExprKind::Unary { op: UnaryOp::BorrowShared, expr: Box::new(object) },
-                            };
-                            let mut method_args = vec![self_ref];
-                            method_args.extend(args.iter().map(|a| self.lower_expr(a)));
-                            (HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) }, method_args)
+                    if let ast::ExprKind::Identifier(namespace) = &object.kind {
+                        if let Some(target_source_id) =
+                            self.namespace_target(callee.span.source_id, namespace)
+                        {
+                            if let Some(id) = self.function_ids
+                                .get(&(target_source_id, name.clone()))
+                                .copied()
+                            {
+                                (
+                                    HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) },
+                                    args.iter().map(|argument| self.lower_expr(argument)).collect(),
+                                )
+                            } else {
+                                (
+                                    self.lower_expr(callee),
+                                    args.iter().map(|argument| self.lower_expr(argument)).collect(),
+                                )
+                            }
                         } else {
-                            (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                            self.lower_method_call(callee.span.source_id, object, name, args, callee)
                         }
                     } else {
-                        (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                        self.lower_method_call(callee.span.source_id, object, name, args, callee)
                     }
                 } else {
-                    (self.lower_expr(callee), args.iter().map(|a| self.lower_expr(a)).collect())
+                    (self.lower_expr(callee), args.iter().map(|argument| self.lower_expr(argument)).collect())
                 };
+
                 let ty = match &callee.kind {
                     HirExprKind::Function(id) if *id == BUILTIN_TYPEOF_ID => Type::Str,
                     HirExprKind::Function(id) if *id == BUILTIN_LEN_ID => Type::I32,
@@ -386,6 +428,73 @@ impl HirLowerer {
                 HirExpr { ty, kind: HirExprKind::Index { object: Box::new(object), index: Box::new(index) } }
             }
         }
+    }
+
+    fn namespace_target(&self, source_id: usize, alias: &str) -> Option<usize> {
+        self.imports.get(&source_id)
+            .and_then(|imports| imports.iter()
+                .find(|(candidate, _)| candidate.as_deref() == Some(alias))
+                .map(|(_, target)| *target))
+    }
+
+    fn resolve_function_id(&self, source_id: usize, name: &str) -> Option<FunctionId> {
+        if let Some(id) = self.function_ids.get(&(source_id, name.to_string())).copied() {
+            return Some(id);
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .find_map(|(_, target)| self.function_ids.get(&(*target, name.to_string())).copied())
+    }
+
+    fn resolve_method_id(&self, source_id: usize, type_name: &str, name: &str) -> Option<FunctionId> {
+        if let Some(id) = self.method_ids
+            .get(&(source_id, type_name.to_string(), name.to_string()))
+            .copied()
+        {
+            return Some(id);
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .find_map(|(_, target)| self.method_ids
+                .get(&(*target, type_name.to_string(), name.to_string()))
+                .copied())
+    }
+
+    fn lower_method_call(
+        &mut self,
+        source_id: usize,
+        object: &ast::Expr,
+        name: &str,
+        args: &[ast::Expr],
+        original_callee: &ast::Expr,
+    ) -> (HirExpr, Vec<HirExpr>) {
+        let object = self.lower_expr(object);
+        if let Type::Named(type_name) = &object.ty {
+            if let Some(id) = self.resolve_method_id(source_id, type_name, name) {
+                let self_ref = HirExpr {
+                    ty: Type::Reference { mutable: false, inner: Box::new(object.ty.clone()) },
+                    kind: HirExprKind::Unary {
+                        op: UnaryOp::BorrowShared,
+                        expr: Box::new(object),
+                    },
+                };
+                let mut method_args = vec![self_ref];
+                method_args.extend(args.iter().map(|argument| self.lower_expr(argument)));
+                return (
+                    HirExpr { ty: Type::Unknown, kind: HirExprKind::Function(id) },
+                    method_args,
+                );
+            }
+        }
+
+        (
+            self.lower_expr(original_callee),
+            args.iter().map(|argument| self.lower_expr(argument)).collect(),
+        )
     }
 
     fn local_id(&self, name: &str) -> LocalId {
