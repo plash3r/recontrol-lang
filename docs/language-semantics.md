@@ -17,6 +17,23 @@ control flow.
 The right-hand side may therefore contain work that would be invalid or unsafe
 when the left-hand side determines the result, such as guarded integer division.
 
+## Loop control
+
+RCL supports condition-controlled `while`, post-tested `do ... while`,
+C-style `for (...; ...; ...)`, and Rust-like infinite `loop { ... }`
+statements.
+
+`break` exits the innermost loop. `continue` advances the innermost loop
+according to its kind:
+
+- in `while`, control returns to the condition;
+- in `do ... while`, control advances to the trailing condition;
+- in `for`, control advances to the update expression before re-checking the
+  condition;
+- in `loop`, control returns to the beginning of the loop body.
+
+Using `break` or `continue` outside a loop is a compile-time error.
+
 ## Integer arithmetic
 
 RCL integer types have fixed widths: signed and unsigned 8, 16, 32, 64, 128,
