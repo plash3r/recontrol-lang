@@ -168,6 +168,8 @@ impl MirBorrowAnalyzer {
             Rvalue::Aggregate { fields, .. } => {
                 for (_, op) in fields { Self::check_operand(function, block, op, state, errors); }
             }
+            Rvalue::EnumVariant { .. } => {}
+            Rvalue::EnumTag { operand } => Self::check_operand(function, block, operand, state, errors),
             Rvalue::Array(values) => {
                 for op in values { Self::check_operand(function, block, op, state, errors); }
             }
