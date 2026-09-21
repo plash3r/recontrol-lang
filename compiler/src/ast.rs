@@ -117,6 +117,8 @@ pub enum StmtKind {
     Let { name: String, mutable: bool, ty: Option<TypeRef>, initializer: Option<Expr> },
     Expr(Expr),
     Return(Option<Expr>),
+    Break,
+    Continue,
     If { condition: Expr, then_branch: Block, else_branch: Option<Box<Stmt>> },
     While { condition: Expr, body: Block },
     DoWhile { body: Block, condition: Expr },
