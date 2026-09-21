@@ -83,6 +83,7 @@ pub struct EnumDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariant {
     pub name: String,
+    pub payload: Vec<TypeRef>,
     pub span: Span,
 }
 
@@ -90,6 +91,7 @@ pub struct EnumVariant {
 pub struct MatchArm {
     pub enum_name: String,
     pub variant: String,
+    pub bindings: Vec<String>,
     pub body: Block,
     pub span: Span,
 }
