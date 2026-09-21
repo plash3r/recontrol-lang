@@ -53,7 +53,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Pub, Fn, Struct, Enum, Match, Impl, Use, If, Else, For, While, Do, Break, Continue, True, False, Return,
+    Let, Mut, Pub, Fn, Struct, Enum, Match, Impl, Use, If, Else, For, While, Do, Loop, Break, Continue, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus, FatArrow,
@@ -169,7 +169,8 @@ impl<'a> Lexer<'a> {
             "let" => TokenKind::Let, "mut" => TokenKind::Mut, "pub" => TokenKind::Pub, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
             "enum" => TokenKind::Enum, "match" => TokenKind::Match,
             "impl" => TokenKind::Impl, "use" => TokenKind::Use, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
-            "while" => TokenKind::While, "do" => TokenKind::Do, "break" => TokenKind::Break, "continue" => TokenKind::Continue,
+            "while" => TokenKind::While, "do" => TokenKind::Do, "loop" => TokenKind::Loop,
+            "break" => TokenKind::Break, "continue" => TokenKind::Continue,
             "true" => TokenKind::True, "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
         };
         Token { kind, lexeme: text.clone(), span: self.span(line, column, text.chars().count()) }
