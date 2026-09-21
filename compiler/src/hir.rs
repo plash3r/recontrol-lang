@@ -16,6 +16,13 @@ pub const BUILTIN_LEN_ID: FunctionId = usize::MAX - 3;
 pub struct HirProgram {
     pub functions: Vec<HirFunction>,
     pub structs: Vec<HirStruct>,
+    pub enums: Vec<HirEnum>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirEnum {
+    pub name: String,
+    pub variants: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +76,14 @@ pub enum HirStmt {
     While { condition: HirExpr, body: HirBlock },
     DoWhile { body: HirBlock, condition: HirExpr },
     For { initializer: Option<Box<HirStmt>>, condition: Option<HirExpr>, update: Option<HirExpr>, body: HirBlock },
+    Match { value: HirExpr, arms: Vec<HirMatchArm> },
     Block(HirBlock),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirMatchArm {
+    pub discriminant: usize,
+    pub body: HirBlock,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +105,7 @@ pub enum HirExprKind {
     StructLiteral { name: String, fields: Vec<(String, HirExpr)> },
     Array(Vec<HirExpr>),
     Index { object: Box<HirExpr>, index: Box<HirExpr> },
+    EnumVariant { name: String, discriminant: usize },
     Function(FunctionId),
 }
 
@@ -100,6 +115,8 @@ pub struct HirLowerer {
     next_local: LocalId,
     functions: Vec<HirFunction>,
     structs: Vec<HirStruct>,
+    enums: Vec<HirEnum>,
+    enum_variants: HashMap<(usize, String), Vec<String>>,
     scopes: Vec<HashMap<String, LocalId>>,
     local_types: HashMap<LocalId, Type>,
     function_ids: HashMap<(usize, String), FunctionId>,
@@ -115,6 +132,8 @@ impl HirLowerer {
             next_local: 0,
             functions: Vec::new(),
             structs: Vec::new(),
+            enums: Vec::new(),
+            enum_variants: HashMap::new(),
             scopes: Vec::new(),
             local_types: HashMap::new(),
             function_ids: HashMap::new(),
@@ -131,6 +150,15 @@ impl HirLowerer {
                         .or_default()
                         .push((import.alias.clone(), target_source_id));
                 }
+            }
+        }
+
+        for item in &program.items {
+            if let ast::Item::Enum(definition) = item {
+                lowerer.enum_variants.insert(
+                    (definition.span.source_id, definition.name.clone()),
+                    definition.variants.iter().map(|variant| variant.name.clone()).collect(),
+                );
             }
         }
 
@@ -180,6 +208,10 @@ impl HirLowerer {
                         ty: Type::from_ref(&f.ty),
                     }).collect(),
                 }),
+                ast::Item::Enum(e) => lowerer.enums.push(HirEnum {
+                    name: e.name.clone(),
+                    variants: e.variants.iter().map(|variant| variant.name.clone()).collect(),
+                }),
                 ast::Item::Function(f) => lowerer.lower_function(f, None),
                 ast::Item::Impl(i) => {
                     for f in &i.methods {
@@ -193,6 +225,7 @@ impl HirLowerer {
         HirProgram {
             functions: lowerer.functions,
             structs: lowerer.structs,
+            enums: lowerer.enums,
         }
     }
 
@@ -298,6 +331,20 @@ impl HirLowerer {
                 update: update.as_ref().map(|e| self.lower_expr(e)),
                 body: self.lower_block(body),
             },
+            ast::StmtKind::Match { value, arms } => HirStmt::Match {
+                value: self.lower_expr(value),
+                arms: arms.iter().map(|arm| {
+                    let discriminant = self.resolve_enum_variant(
+                        arm.span.source_id,
+                        &arm.enum_name,
+                        &arm.variant,
+                    ).unwrap_or(0);
+                    HirMatchArm {
+                        discriminant,
+                        body: self.lower_block(&arm.body),
+                    }
+                }).collect(),
+            },
             ast::StmtKind::Block(b) => HirStmt::Block(self.lower_block(b)),
         }
     }
@@ -385,6 +432,19 @@ impl HirLowerer {
                 HirExpr { ty, kind: HirExprKind::Call { callee: Box::new(callee), args } }
             }
             ast::ExprKind::Member { object, name } => {
+                if let ast::ExprKind::Identifier(enum_name) = &object.kind {
+                    if let Some(discriminant) =
+                        self.resolve_enum_variant(expr.span.source_id, enum_name, name)
+                    {
+                        return HirExpr {
+                            ty: Type::Named(enum_name.clone()),
+                            kind: HirExprKind::EnumVariant {
+                                name: enum_name.clone(),
+                                discriminant,
+                            },
+                        };
+                    }
+                }
                 let object = self.lower_expr(object);
                 let ty = match &object.ty {
                     Type::Named(type_name) => self.structs.iter().find(|structure| &structure.name == type_name)
@@ -446,6 +506,19 @@ impl HirLowerer {
             .flatten()
             .filter(|(alias, _)| alias.is_none())
             .find_map(|(_, target)| self.function_ids.get(&(*target, name.to_string())).copied())
+    }
+
+    fn resolve_enum_variant(&self, source_id: usize, enum_name: &str, variant: &str) -> Option<usize> {
+        if let Some(variants) = self.enum_variants.get(&(source_id, enum_name.to_string())) {
+            return variants.iter().position(|candidate| candidate == variant);
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .find_map(|(_, target)| self.enum_variants
+                .get(&(*target, enum_name.to_string()))
+                .and_then(|variants| variants.iter().position(|candidate| candidate == variant)))
     }
 
     fn resolve_method_id(&self, source_id: usize, type_name: &str, name: &str) -> Option<FunctionId> {
