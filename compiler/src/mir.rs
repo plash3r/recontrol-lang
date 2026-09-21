@@ -334,7 +334,8 @@ impl MirLowerer {
                     Self::collect_stmt_locals(else_branch, locals);
                 }
             }
-            HirStmt::While { body, .. } | HirStmt::DoWhile { body, .. } => Self::collect_block_locals(body, locals),
+            HirStmt::While { body, .. } | HirStmt::Loop { body } | HirStmt::DoWhile { body, .. } =>
+                Self::collect_block_locals(body, locals),
             HirStmt::For { initializer, body, .. } => {
                 if let Some(initializer) = initializer {
                     Self::collect_stmt_locals(initializer, locals);
@@ -610,6 +611,20 @@ impl MirLowerer {
                 builder.loop_targets.pop();
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(head));
+                }
+                builder.switch_to(exit);
+            }
+            HirStmt::Loop { body } => {
+                let body_block = builder.new_block();
+                let exit = builder.new_block();
+                builder.finish_block(Terminator::Goto(body_block));
+
+                builder.switch_to(body_block);
+                builder.loop_targets.push((body_block, exit));
+                Self::lower_block(builder, body, locals);
+                builder.loop_targets.pop();
+                if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
+                    builder.finish_block(Terminator::Goto(body_block));
                 }
                 builder.switch_to(exit);
             }
