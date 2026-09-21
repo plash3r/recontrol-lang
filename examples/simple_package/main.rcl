@@ -1,8 +1,8 @@
-use "math.rcl"
+use "math.rcl" as math
 
 fn main() {
-    let sum: i32 = add(2, 3)
-    let result: i32 = double(sum)
+    let sum: i32 = math.add(2, 3)
+    let result: i32 = math.double(sum)
     println("%s %d\n", typeof(sum), sum)
     println(532)
 }
