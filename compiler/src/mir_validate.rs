@@ -271,6 +271,10 @@ impl MirValidator {
                     Self::check_storage_operand(function, op, state, local_ids, validate, errors);
                 }
             }
+            Rvalue::EnumVariant { .. } => {}
+            Rvalue::EnumTag { operand } => {
+                Self::check_storage_operand(function, operand, state, local_ids, validate, errors);
+            }
             Rvalue::Array(values) => {
                 for op in values {
                     Self::check_storage_operand(function, op, state, local_ids, validate, errors);
@@ -347,6 +351,8 @@ impl MirValidator {
             Rvalue::Aggregate { fields, .. } => {
                 for (_, op) in fields { Self::validate_operand_shape(function, op, locals, errors); }
             }
+            Rvalue::EnumVariant { .. } => {}
+            Rvalue::EnumTag { operand } => Self::validate_operand_shape(function, operand, locals, errors),
             Rvalue::Array(values) => {
                 for op in values { Self::validate_operand_shape(function, op, locals, errors); }
             }
