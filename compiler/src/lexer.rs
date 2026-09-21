@@ -53,7 +53,7 @@ impl Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier, Number, String,
-    Let, Mut, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
+    Let, Mut, Pub, Fn, Struct, Impl, Use, If, Else, For, While, Do, True, False, Return,
     Plus, Minus, Star, Slash, Percent, Equal, PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, EqualEqual,
     NotEqual, Less, LessEqual, Greater, GreaterEqual,
     AndAnd, OrOr, Ampersand, Bang, PlusPlus, MinusMinus,
@@ -165,7 +165,7 @@ impl<'a> Lexer<'a> {
         let mut text = first.to_string();
         while !self.is_at_end() && is_ident_continue(self.peek()) { text.push(self.advance()); }
         let kind = match text.as_str() {
-            "let" => TokenKind::Let, "mut" => TokenKind::Mut, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
+            "let" => TokenKind::Let, "mut" => TokenKind::Mut, "pub" => TokenKind::Pub, "fn" => TokenKind::Fn, "struct" => TokenKind::Struct,
             "impl" => TokenKind::Impl, "use" => TokenKind::Use, "if" => TokenKind::If, "else" => TokenKind::Else, "for" => TokenKind::For,
             "while" => TokenKind::While, "do" => TokenKind::Do, "true" => TokenKind::True,
             "false" => TokenKind::False, "return" => TokenKind::Return, _ => TokenKind::Identifier,
