@@ -230,8 +230,8 @@ impl HirLowerer {
     }
 
     fn lower_stmt(&mut self, statement: &ast::Stmt, locals: &mut Vec<HirLocal>) -> HirStmt {
-        match statement {
-            ast::Stmt::Let { name, mutable, ty, initializer } => {
+        match &statement.kind {
+            ast::StmtKind::Let { name, mutable, ty, initializer } => {
                 let local = self.new_local();
                 let initializer_hir = initializer.as_ref().map(|e| self.lower_expr(e));
                 let inferred = initializer_hir.as_ref().map(|e| e.ty.clone());
@@ -244,35 +244,35 @@ impl HirLowerer {
                     initializer: initializer_hir,
                 }
             }
-            ast::Stmt::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
-            ast::Stmt::Return(e) => HirStmt::Return(e.as_ref().map(|e| self.lower_expr(e))),
-            ast::Stmt::If { condition, then_branch, else_branch } => HirStmt::If {
+            ast::StmtKind::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
+            ast::StmtKind::Return(e) => HirStmt::Return(e.as_ref().map(|e| self.lower_expr(e))),
+            ast::StmtKind::If { condition, then_branch, else_branch } => HirStmt::If {
                 condition: self.lower_expr(condition),
                 then_branch: self.lower_block(then_branch),
                 else_branch: else_branch.as_ref().map(|s| Box::new(self.lower_stmt(s, &mut Vec::new()))),
             },
-            ast::Stmt::While { condition, body } => HirStmt::While {
+            ast::StmtKind::While { condition, body } => HirStmt::While {
                 condition: self.lower_expr(condition),
                 body: self.lower_block(body),
             },
-            ast::Stmt::DoWhile { body, condition } => HirStmt::DoWhile {
+            ast::StmtKind::DoWhile { body, condition } => HirStmt::DoWhile {
                 body: self.lower_block(body),
                 condition: self.lower_expr(condition),
             },
-            ast::Stmt::For { initializer, condition, update, body } => HirStmt::For {
+            ast::StmtKind::For { initializer, condition, update, body } => HirStmt::For {
                 initializer: initializer.as_ref().map(|s| Box::new(self.lower_stmt(s, locals))),
                 condition: condition.as_ref().map(|e| self.lower_expr(e)),
                 update: update.as_ref().map(|e| self.lower_expr(e)),
                 body: self.lower_block(body),
             },
-            ast::Stmt::Block(b) => HirStmt::Block(self.lower_block(b)),
+            ast::StmtKind::Block(b) => HirStmt::Block(self.lower_block(b)),
         }
     }
 
     fn lower_expr(&mut self, expr: &ast::Expr) -> HirExpr {
-        match expr {
-            ast::Expr::Literal(lit) => HirExpr { ty: self.literal_type(lit), kind: HirExprKind::Literal(lit.clone()) },
-            ast::Expr::Identifier(name) => {
+        match &expr.kind {
+            ast::ExprKind::Literal(lit) => HirExpr { ty: self.literal_type(lit), kind: HirExprKind::Literal(lit.clone()) },
+            ast::ExprKind::Identifier(name) => {
                 if name == "println" {
                     HirExpr { ty: Type::Unit, kind: HirExprKind::Function(BUILTIN_PRINTLN_ID) }
                 } else if name == "print" {
@@ -289,7 +289,7 @@ impl HirLowerer {
                     HirExpr { ty, kind: HirExprKind::Local(local) }
                 }
             },
-            ast::Expr::Unary { op, expr } => {
+            ast::ExprKind::Unary { op, expr } => {
                 let inner = self.lower_expr(expr);
                 let ty = match op {
                     UnaryOp::BorrowShared => Type::Reference { mutable: false, inner: Box::new(inner.ty.clone()) },
@@ -298,7 +298,7 @@ impl HirLowerer {
                 };
                 HirExpr { ty, kind: HirExprKind::Unary { op: *op, expr: Box::new(inner) } }
             }
-            ast::Expr::Binary { left, op, right } => {
+            ast::ExprKind::Binary { left, op, right } => {
                 let l = self.lower_expr(left);
                 let r = self.lower_expr(right);
                 let ty = match op {
@@ -308,13 +308,13 @@ impl HirLowerer {
                 };
                 HirExpr { ty, kind: HirExprKind::Binary { left: Box::new(l), op: *op, right: Box::new(r) } }
             }
-            ast::Expr::Assignment { target, op, value } => {
+            ast::ExprKind::Assignment { target, op, value } => {
                 let target = self.lower_expr(target);
                 let value = self.lower_expr(value);
                 HirExpr { ty: target.ty.clone(), kind: HirExprKind::Assignment { target: Box::new(target), op: *op, value: Box::new(value) } }
             }
-            ast::Expr::Call { callee, args } => {
-                let (callee, args) = if let ast::Expr::Member { object, name } = callee.as_ref() {
+            ast::ExprKind::Call { callee, args } => {
+                let (callee, args) = if let ast::ExprKind::Member { object, name } = &callee.kind {
                     let object = self.lower_expr(object);
                     if let Type::Named(type_name) = &object.ty {
                         if let Some(id) = self.method_ids.get(&(type_name.clone(), name.clone())).copied() {
@@ -342,7 +342,7 @@ impl HirLowerer {
                 };
                 HirExpr { ty, kind: HirExprKind::Call { callee: Box::new(callee), args } }
             }
-            ast::Expr::Member { object, name } => {
+            ast::ExprKind::Member { object, name } => {
                 let object = self.lower_expr(object);
                 let ty = match &object.ty {
                     Type::Named(type_name) => self.structs.iter().find(|structure| &structure.name == type_name)
@@ -358,24 +358,24 @@ impl HirLowerer {
                 };
                 HirExpr { ty, kind: HirExprKind::Member { object: Box::new(object), name: name.clone() } }
             }
-            ast::Expr::Postfix { expr, op } => {
+            ast::ExprKind::Postfix { expr, op } => {
                 let expr = self.lower_expr(expr);
                 HirExpr { ty: expr.ty.clone(), kind: HirExprKind::Postfix { expr: Box::new(expr), op: *op } }
             }
-            ast::Expr::Grouping(inner) => self.lower_expr(inner),
-            ast::Expr::StructLiteral { name, fields } => HirExpr {
+            ast::ExprKind::Grouping(inner) => self.lower_expr(inner),
+            ast::ExprKind::StructLiteral { name, fields } => HirExpr {
                 ty: Type::Named(name.clone()),
                 kind: HirExprKind::StructLiteral {
                     name: name.clone(),
                     fields: fields.iter().map(|(n, e)| (n.clone(), self.lower_expr(e))).collect(),
                 },
             },
-            ast::Expr::Array(values) => {
+            ast::ExprKind::Array(values) => {
                 let values: Vec<_> = values.iter().map(|e| self.lower_expr(e)).collect();
                 let ty = values.first().map(|e| Type::Array { element: Box::new(e.ty.clone()), len: values.len() }).unwrap_or(Type::Array { element: Box::new(Type::Unknown), len: 0 });
                 HirExpr { ty, kind: HirExprKind::Array(values) }
             }
-            ast::Expr::Index { object, index } => {
+            ast::ExprKind::Index { object, index } => {
                 let object = self.lower_expr(object);
                 let index = self.lower_expr(index);
                 let ty = match &object.ty {
