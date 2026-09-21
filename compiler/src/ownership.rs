@@ -183,6 +183,7 @@ impl OwnershipChecker {
                     self.expr(expression, env, true);
                 }
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::If { condition, then_branch, else_branch } => {
                 self.expr(condition, env, false);
                 self.check_block(then_branch, env);
