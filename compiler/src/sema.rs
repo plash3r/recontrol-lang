@@ -422,30 +422,66 @@ impl SemanticAnalyzer {
 
                 let mut seen = Vec::<String>::new();
                 for arm in arms {
-                    if arm.enum_name != enum_name {
+                    let variant_info = if arm.enum_name != enum_name {
                         self.error_at(
                             arm.span,
                             format!("match arm uses enum '{}', expected '{}'", arm.enum_name, enum_name),
                         );
-                    } else if !info.variants.iter().any(|variant| variant == &arm.variant) {
-                        self.error_at(
-                            arm.span,
-                            format!("unknown enum variant '{}.{}'", enum_name, arm.variant),
-                        );
-                    } else if seen.iter().any(|variant| variant == &arm.variant) {
-                        self.error_at(
-                            arm.span,
-                            format!("duplicate match arm '{}.{}'", enum_name, arm.variant),
-                        );
+                        None
                     } else {
-                        seen.push(arm.variant.clone());
+                        match info.variants.iter().find(|variant| variant.name == arm.variant) {
+                            None => {
+                                self.error_at(
+                                    arm.span,
+                                    format!("unknown enum variant '{}.{}'", enum_name, arm.variant),
+                                );
+                                None
+                            }
+                            Some(variant) if seen.iter().any(|name| name == &arm.variant) => {
+                                self.error_at(
+                                    arm.span,
+                                    format!("duplicate match arm '{}.{}'", enum_name, arm.variant),
+                                );
+                                Some(variant)
+                            }
+                            Some(variant) => {
+                                seen.push(arm.variant.clone());
+                                Some(variant)
+                            }
+                        }
+                    };
+
+                    env.push();
+                    if let Some(variant) = variant_info {
+                        if arm.bindings.len() != variant.payload.len() {
+                            self.error_at(
+                                arm.span,
+                                format!(
+                                    "match payload count for '{}.{}': expected {}, found {}",
+                                    enum_name,
+                                    arm.variant,
+                                    variant.payload.len(),
+                                    arm.bindings.len(),
+                                ),
+                            );
+                        }
+                        for (index, binding) in arm.bindings.iter().enumerate() {
+                            if binding == "_" { continue; }
+                            let ty = variant.payload.get(index).cloned().unwrap_or(Type::Unknown);
+                            if !env.define(binding.clone(), ty, false) {
+                                self.error_at(arm.span, format!("duplicate match binding '{}'", binding));
+                            }
+                        }
                     }
-                    self.check_block(&arm.body, env, return_type);
+                    for statement in &arm.body.statements {
+                        self.check_stmt(statement, env, return_type);
+                    }
+                    env.pop();
                 }
 
                 let missing = info.variants.iter()
-                    .filter(|variant| !seen.iter().any(|seen| seen == *variant))
-                    .cloned()
+                    .filter(|variant| !seen.iter().any(|seen| seen == &variant.name))
+                    .map(|variant| variant.name.clone())
                     .collect::<Vec<_>>();
                 if !missing.is_empty() {
                     self.error_at(
@@ -762,6 +798,54 @@ impl SemanticAnalyzer {
                 }
             }
 
+            if let ExprKind::Identifier(enum_name) = &object.kind {
+                match self.resolve_enum(callee.span.source_id, enum_name) {
+                    Ok(Some(info)) => {
+                        if info.source_id != callee.span.source_id && !info.public {
+                            self.error_at(callee.span, format!("enum '{}' is private", enum_name));
+                        }
+                        if let Some(variant) = info.variants.iter().find(|variant| variant.name == *name) {
+                            if args.len() != variant.payload.len() {
+                                self.error_at(
+                                    span,
+                                    format!(
+                                        "wrong payload count for '{}.{}': expected {}, found {}",
+                                        enum_name,
+                                        name,
+                                        variant.payload.len(),
+                                        args.len(),
+                                    ),
+                                );
+                            }
+                            for (index, argument) in args.iter().enumerate() {
+                                let actual = self.expr(argument, env);
+                                if let Some(expected) = variant.payload.get(index) {
+                                    if !self.compatible_expr(expected, &actual, Some(argument)) {
+                                        self.error_at(
+                                            argument.span,
+                                            format!(
+                                                "payload {} type mismatch for '{}.{}': expected {}, found {}",
+                                                index + 1,
+                                                enum_name,
+                                                name,
+                                                expected.display_name(),
+                                                actual.display_name(),
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            return Type::Named(enum_name.clone());
+                        }
+                    }
+                    Err(()) => {
+                        self.error_at(callee.span, format!("ambiguous imported enum '{}'", enum_name));
+                        return Type::Unknown;
+                    }
+                    Ok(None) => {}
+                }
+            }
+
             let object_ty = self.expr(object, env);
             let type_name = match object_ty {
                 Type::Named(name) => name,
@@ -836,7 +920,19 @@ impl SemanticAnalyzer {
                     if info.source_id != span.source_id && !info.public {
                         self.error_at(span, format!("enum '{}' is private", enum_name));
                     }
-                    if info.variants.iter().any(|variant| variant == name) {
+                    if let Some(variant) = info.variants.iter().find(|variant| variant.name == name) {
+                        if !variant.payload.is_empty() {
+                            self.error_at(
+                                span,
+                                format!(
+                                    "enum variant '{}.{}' requires {} payload value(s)",
+                                    enum_name,
+                                    name,
+                                    variant.payload.len(),
+                                ),
+                            );
+                            return Type::Unknown;
+                        }
                         return Type::Named(enum_name.clone());
                     }
                     self.error_at(span, format!("unknown enum variant '{}.{}'", enum_name, name));
