@@ -561,7 +561,7 @@ impl<'a> Cx<'a> {
     fn err_result<T>(&self,msg:&str)->Result<T,Vec<CodegenError>> { Err(vec![self.err(msg)]) }
 }
 
-fn split_number(n:&str)->(&str,&str) { let mut i=n.len(); while i>0&&n.as_bytes()[i-1].is_ascii_alphabetic(){i-=1;} (&n[..i],&n[i..]) }
+fn split_number(n:&str)->(&str,&str) { let i=n.find(|c:char| c.is_ascii_alphabetic()).unwrap_or(n.len()); (&n[..i],&n[i..]) }
 fn number_type(n:&str)->Type {
     let l=n.to_ascii_lowercase();
     for s in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"] {
