@@ -1,0 +1,21 @@
+enum Message {
+    Empty
+    Number(i32)
+    Pair(i32, i32)
+}
+
+fn main() {
+    let message: Message = Message.Pair(20, 22)
+
+    match message {
+        Message.Empty => {
+            println(0)
+        }
+        Message.Number(value) => {
+            println(value)
+        }
+        Message.Pair(left, right) => {
+            println(left + right)
+        }
+    }
+}
