@@ -35,6 +35,8 @@ jobs:
         run: cargo run -p rcl -- run tests/programs/run-pass/short_circuit.rcl
       - name: Verify fixed arrays cross function boundaries
         run: cargo run -p rcl -- run tests/programs/run-pass/array_parameter.rcl
+      - name: Verify public imported declarations
+        run: cargo run -p rcl -- run tests/programs/run-pass/public-import/main.rcl
       - name: Verify literals wider than u128
         run: cargo run -p rcl -- run tests/programs/run-pass/i256_wide_literal.rcl
       - name: Verify integer division by zero is deterministic
@@ -47,10 +49,29 @@ jobs:
       - name: Verify compile-fail programs
         shell: bash
         run: |
-          for file in             tests/programs/compile-fail/i256_overflow.rcl             tests/programs/compile-fail/borrow_conflict.rcl             tests/programs/compile-fail/import-error/main.rcl
-          do
+          files=(
+            tests/programs/compile-fail/i256_overflow.rcl
+            tests/programs/compile-fail/borrow_conflict.rcl
+            tests/programs/compile-fail/import-error/main.rcl
+            tests/programs/compile-fail/private-import/main.rcl
+          )
+          for file in "${files[@]}"; do
             if cargo run -p rcl -- check "$file"; then
               echo "expected $file to fail" >&2
               exit 1
             fi
           done
+      - name: Verify imported-file diagnostics
+        shell: bash
+        run: |
+          output="$(cargo run -p rcl -- check tests/programs/compile-fail/import-error/main.rcl 2>&1 || true)"
+          echo "$output"
+          grep -F "broken.rcl:" <<<"$output"
+          grep -F "missing_value" <<<"$output"
+      - name: Verify borrow diagnostics include origin
+        shell: bash
+        run: |
+          output="$(cargo run -p rcl -- check tests/programs/compile-fail/borrow_conflict.rcl 2>&1 || true)"
+          echo "$output"
+          grep -F "note:" <<<"$output"
+          grep -F "existing mutable borrow starts here" <<<"$output"
