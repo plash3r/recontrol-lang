@@ -86,6 +86,7 @@ impl BorrowChecker {
                     }
                 }
                 Item::Struct(_) => {}
+                Item::Import(_) => {}
             }
         }
 
@@ -126,6 +127,7 @@ impl BorrowChecker {
                     }
                 }
                 Item::Struct(_) => {}
+                Item::Import(_) => {}
             }
         }
     }
@@ -279,7 +281,7 @@ impl BorrowChecker {
 
     fn check_call(&mut self, callee: &Expr, args: &[Expr], env: &Env) {
         if let Expr::Identifier(name) = callee {
-            if name == "print" || name == "println" {
+            if name == "print" || name == "println" || name == "typeof" || name == "len" {
                 for arg in args { self.check_expression(arg, env); }
                 return;
             }

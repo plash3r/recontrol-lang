@@ -1,4 +1,16 @@
 fn main() {
-    let message: str = "Hello, Recontrol!"
-    println(message)
+    let mut values: i32[5] = [5, 2, 9, 1, 3]
+    let size: i32 = len(values)
+
+    for (let mut i: i32 = 0; i < size; i++) {
+        for (let mut j: i32 = 0; j < size - 1 - i; j++) {
+            if values[j] > values[j + 1] {
+                let temp: i32 = values[j]
+                values[j] = values[j + 1]
+                values[j + 1] = temp
+            }
+        }
+    }
+
+    println(values)
 }

@@ -285,6 +285,20 @@ mod tests {
     }
 
     #[test]
+    fn string_local_is_borrowed_by_println() {
+        let mir = lower(r#"
+            fn main() {
+                let message: str = "Hello, Recontrol!"
+                println(message)
+                for (let mut i: i32 = 0; i < 5; i++) {
+                    println("Hello, Recontrol!")
+                }
+            }
+        "#);
+        assert!(MirMoveAnalyzer::analyze(&mir).is_ok());
+    }
+
+    #[test]
     fn copy_integer_survives_for_loop_backedge() {
         let mir = lower(r#"
             fn main() {

@@ -65,6 +65,7 @@ impl SemanticAnalyzer {
                     if self.methods.insert(key.clone(),FunctionSig{params,return_type:f.return_type.as_ref().map(Type::from_ref).unwrap_or(Type::Unit)}).is_some(){self.error(format!("duplicate method '{}.{}'",key.0,key.1));}
                 }
             }
+            Item::Import(_) => {}
         }}
     }
     fn check_items(&mut self,p:&Program){
@@ -72,6 +73,7 @@ impl SemanticAnalyzer {
             Item::Function(f)=>self.check_function(f,None),
             Item::Impl(i)=>for f in &i.methods{self.check_function(f,Some(&i.type_name));},
             Item::Struct(_)=>{}
+            Item::Import(_)=>{}
         }}
     }
     fn check_function(&mut self,f:&Function,impl_ty:Option<&str>){
@@ -85,7 +87,14 @@ impl SemanticAnalyzer {
         match s {
             Stmt::Let{name,mutable,ty,initializer}=>{
                 let actual=initializer.as_ref().map(|x|self.expr(x,e));let declared=ty.as_ref().map(Type::from_ref);
-                let final_ty=match(declared,actual){(Some(d),Some(a))=>{if !self.compatible(&d,&a){self.error(format!("type mismatch: expected {}, found {}",d.display_name(),a.display_name()));}d},(Some(d),None)=>d,(None,Some(a))=>a,(None,None)=>Type::Unknown};
+                if let (Some(type_ref), Some(Expr::Array(values))) = (ty.as_ref(), initializer.as_ref()) {
+                    if let Some(expected_len) = type_ref.array_len {
+                        if values.len() != expected_len {
+                            self.error(format!("array length mismatch: expected {}, found {}", expected_len, values.len()));
+                        }
+                    }
+                }
+                let final_ty=match(declared,actual){(Some(d),Some(a))=>{if !self.compatible_expr(&d,&a,initializer.as_ref()){self.error(format!("type mismatch: expected {}, found {}",d.display_name(),a.display_name()));}d},(Some(d),None)=>d,(None,Some(a))=>a,(None,None)=>Type::Unknown};
                 if !e.define(name.clone(),final_ty,*mutable){self.error(format!("duplicate variable '{}'",name));}
             }
             Stmt::Expr(x)=>{self.expr(x,e);}
@@ -110,8 +119,8 @@ impl SemanticAnalyzer {
                 UnaryOp::BorrowShared=>Type::Reference{mutable:false,inner:Box::new(t)},
                 UnaryOp::BorrowMutable=>{if !self.assignable(expr,e){self.error("cannot mutably borrow immutable expression");}Type::Reference{mutable:true,inner:Box::new(t)}}
             }}
-            Expr::Binary{left,op,right}=>{let a=self.expr(left,e);let b=self.expr(right,e);match op{BinaryOp::And|BinaryOp::Or=>{if a!=Type::Bool||b!=Type::Bool{self.error("logical operators require bool operands");}Type::Bool},BinaryOp::Equal|BinaryOp::NotEqual|BinaryOp::Less|BinaryOp::LessEqual|BinaryOp::Greater|BinaryOp::GreaterEqual=>{if !self.compatible(&a,&b){self.error("incompatible comparison types");}Type::Bool},_=>if a.is_numeric()&&b.is_numeric()&&self.compatible(&a,&b){a}else{self.error("incompatible numeric operands");Type::Unknown}}}
-            Expr::Assignment{target,op,value}=>{let t=self.expr(target,e);if !self.assignable(target,e){self.error("cannot assign to immutable expression");}let v=self.expr(value,e);if *op==AssignOp::Assign{if !self.compatible(&t,&v){self.error("assignment type mismatch");}}else if !t.is_numeric()||!v.is_numeric()||!self.compatible(&t,&v){self.error("compound assignment requires compatible numeric operands");}t}
+            Expr::Binary{left,op,right}=>{let a=self.expr(left,e);let b=self.expr(right,e);match op{BinaryOp::And|BinaryOp::Or=>{if a!=Type::Bool||b!=Type::Bool{self.error("logical operators require bool operands");}Type::Bool},BinaryOp::Equal|BinaryOp::NotEqual|BinaryOp::Less|BinaryOp::LessEqual|BinaryOp::Greater|BinaryOp::GreaterEqual=>{if !self.compatible_exprs(&a,left,&b,right){self.error("incompatible comparison types");}Type::Bool},_=>if a.is_numeric()&&b.is_numeric()&&self.compatible_exprs(&a,left,&b,right){a}else{self.error("incompatible numeric operands");Type::Unknown}}}
+            Expr::Assignment{target,op,value}=>{let t=self.expr(target,e);if !self.assignable(target,e){self.error("cannot assign to immutable expression");}let v=self.expr(value,e);if *op==AssignOp::Assign{if !self.compatible_expr(&t,&v,Some(value)){self.error("assignment type mismatch");}}else if !t.is_numeric()||!v.is_numeric()||!self.compatible_expr(&t,&v,Some(value)){self.error("compound assignment requires compatible numeric operands");}t}
             Expr::Call{callee,args}=>self.call(callee,args,e),
             Expr::Member{object,name}=>self.member(object,name,e),
             Expr::Postfix{expr,..}=>{let t=self.expr(expr,e);if !self.assignable(expr,e){self.error("cannot modify immutable expression");}if !t.is_numeric(){self.error("increment/decrement requires a numeric value");}t}
@@ -122,7 +131,7 @@ impl SemanticAnalyzer {
     }
     fn assignable(&self,x:&Expr,e:&Env)->bool{match x{Expr::Identifier(n)=>e.is_mutable(n),Expr::Member{object,..}|Expr::Index{object,..}=>matches!(object.as_ref(),Expr::Identifier(n) if e.is_mutable(n)),_=>false}}
     fn call(&mut self,c:&Expr,args:&[Expr],e:&Env)->Type{
-        if let Expr::Identifier(n)=c{if n=="println"||n=="print"{for a in args{self.expr(a,e);}return Type::Unit}if let Some(s)=self.functions.get(n).cloned(){return self.signature(&s,args,e)}self.error(format!("unknown function '{}'",n));return Type::Unknown}
+        if let Expr::Identifier(n)=c{if n=="println"||n=="print"{for a in args{self.expr(a,e);}return Type::Unit}if n=="typeof"{if args.len()!=1{self.error(format!("typeof expects 1 argument, found {}",args.len()));}for a in args{self.expr(a,e);}return Type::Str}if n=="len"{if args.len()!=1{self.error(format!("len expects 1 argument, found {}",args.len()));}if let Some(a)=args.first(){if !matches!(self.expr(a,e),Type::Array(_)){self.error("len expects an array");}}return Type::I32}if let Some(s)=self.functions.get(n).cloned(){return self.signature(&s,args,e)}self.error(format!("unknown function '{}'",n));return Type::Unknown}
         if let Expr::Member{object,name}=c{let o=self.expr(object,e);let tn=match o{Type::Named(n)=>n,Type::Reference{inner,..}=>match *inner{Type::Named(n)=>n,_=>String::new()},_=>String::new()};if let Some(s)=self.methods.get(&(tn.clone(),name.clone())).cloned(){let mut all=vec![object.as_ref().clone()];all.extend_from_slice(args);return self.signature(&s,&all,e)}self.error(format!("unknown method '{}.{}'",tn,name));return Type::Unknown}
         self.error("expression is not callable");Type::Unknown
     }
@@ -144,6 +153,42 @@ impl SemanticAnalyzer {
     }
     fn number_type(&self,n:&str)->Type{let l=n.to_ascii_lowercase();for s in ["u8","u16","u32","u64","u128","u256","i8","i16","i32","i64","i128","i256","f32","f64","f128"]{if l.ends_with(s){return match s{"u8"=>Type::U8,"u16"=>Type::U16,"u32"=>Type::U32,"u64"=>Type::U64,"u128"=>Type::U128,"u256"=>Type::U256,"i8"=>Type::I8,"i16"=>Type::I16,"i32"=>Type::I32,"i64"=>Type::I64,"i128"=>Type::I128,"i256"=>Type::I256,"f32"=>Type::F32,"f64"=>Type::F64,"f128"=>Type::F128,_=>Type::Unknown}}}if l.contains('.') {Type::F64}else{Type::I32}}
     fn compatible(&self,a:&Type,b:&Type)->bool{a==b||matches!(a,Type::Unknown)||matches!(b,Type::Unknown)||matches!(a,Type::Reference{inner,..} if inner.as_ref()==b)}
+    fn compatible_expr(&self,expected:&Type,actual:&Type,expr:Option<&Expr>)->bool{
+        let literal = match expr {
+            Some(Expr::Literal(Literal::Number(n))) => Some((n, false)),
+            Some(Expr::Unary { op: UnaryOp::Minus, expr }) => match expr.as_ref() {
+                Expr::Literal(Literal::Number(n)) => Some((n, true)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((n, negative))=literal {
+            if expected.is_integer() && !self.literal_fits_integer(n, negative, expected) { return false; }
+            if self.compatible(expected,actual) { return true; }
+            return matches!(actual,Type::I32) && !n.chars().any(|c| c.is_ascii_alphabetic());
+        }
+        self.compatible(expected,actual)
+    }
+    fn literal_fits_integer(&self,n:&str,negative:bool,ty:&Type)->bool{
+        let digits=n.trim_end_matches(|c:char| c.is_ascii_alphabetic());
+        let Ok(value)=digits.parse::<u128>() else { return false; };
+        match ty {
+            Type::I8 => value <= if negative { 128 } else { i8::MAX as u128 },
+            Type::I16 => value <= if negative { 32_768 } else { i16::MAX as u128 },
+            Type::I32 => value <= if negative { 2_147_483_648 } else { i32::MAX as u128 },
+            Type::I64 => value <= if negative { 9_223_372_036_854_775_808 } else { i64::MAX as u128 },
+            Type::I128 => value <= if negative { i128::MAX as u128 + 1 } else { i128::MAX as u128 },
+            Type::U8 => !negative && value <= u8::MAX as u128,
+            Type::U16 => !negative && value <= u16::MAX as u128,
+            Type::U32 => !negative && value <= u32::MAX as u128,
+            Type::U64 => !negative && value <= u64::MAX as u128,
+            Type::U128 => !negative,
+            Type::I256 => true,
+            Type::U256 => !negative,
+            _ => true,
+        }
+    }
+    fn compatible_exprs(&self,left:&Type,left_expr:&Expr,right:&Type,right_expr:&Expr)->bool{self.compatible_expr(left,right,Some(right_expr))||self.compatible_expr(right,left,Some(left_expr))}
 }
 
 #[cfg(test)]
@@ -152,6 +197,7 @@ mod tests {
     use crate::{lexer::Lexer,parser::Parser};
     fn check(s:&str)->Result<(),Vec<SemanticError>>{let t=Lexer::new(s).tokenize().unwrap();let p=Parser::new(t).parse().unwrap();SemanticAnalyzer::check(&p)}
     #[test]fn types(){assert!(check("fn main(){let x:i32=10 let y:u64=20u64}").is_ok());assert!(check("fn main(){let x:i32=true}").is_err());}
+    #[test]fn integer_literal_must_fit_declared_type(){assert!(check("fn main(){let x:i8=127}").is_ok());assert!(check("fn main(){let x:i8=128}").is_err());}
     #[test]fn names(){assert!(check("fn main(){println(missing)}").is_err());}
     #[test]fn mutability(){assert!(check("fn main(){let x=1 x=2}").is_err());assert!(check("fn main(){let mut x=1 x+=2 x++}").is_ok());}
     #[test]fn else_if(){assert!(check("fn main(){if true{}else if false{}else{}}").is_ok());}

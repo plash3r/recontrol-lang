@@ -66,6 +66,7 @@ impl OwnershipChecker {
                     checker.check_function(f, Some(&i.type_name));
                 },
                 Item::Struct(_) => {}
+                Item::Import(_) => {}
             }
         }
 
@@ -107,6 +108,7 @@ impl OwnershipChecker {
                     );
                 },
                 Item::Struct(_) => {}
+                Item::Import(_) => {}
             }
         }
     }
@@ -261,7 +263,7 @@ impl OwnershipChecker {
 
     fn call(&mut self, callee: &Expr, args: &[Expr], env: &mut Env) -> Type {
         if let Expr::Identifier(name) = callee {
-            if name == "print" || name == "println" {
+            if name == "print" || name == "println" || name == "typeof" || name == "len" {
                 for arg in args { self.expr(arg, env, false); }
                 return Type::Unit;
             }
