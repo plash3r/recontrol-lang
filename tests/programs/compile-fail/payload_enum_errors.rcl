@@ -1,0 +1,17 @@
+enum Maybe {
+    None
+    Some(i32)
+}
+
+fn main() {
+    let value: Maybe = Maybe.Some("wrong")
+
+    match value {
+        Maybe.None(extra) => {
+            println(0)
+        }
+        Maybe.Some() => {
+            println(1)
+        }
+    }
+}
