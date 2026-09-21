@@ -261,6 +261,7 @@ impl BorrowChecker {
                     self.check_expression(expression, env);
                 }
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::If { condition, then_branch, else_branch } => {
                 self.check_expression(condition, env);
                 self.check_block_body(then_branch, env);
