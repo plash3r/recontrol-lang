@@ -18,47 +18,126 @@ use rcl::parser::Parser;
 use rcl::sema::SemanticAnalyzer;
 
 
+#[derive(Debug, Clone)]
+struct SourceFile {
+    path: PathBuf,
+    source: String,
+}
+
 fn check_source(path: &str) -> Result<rcl::mir::MirProgram, String> {
-    let source = fs::read_to_string(path).map_err(|e| format!("rcl: cannot read {path}: {e}"))?;
-    let program = load_program(Path::new(path), &mut Vec::new())?;
-    SemanticAnalyzer::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
-    BorrowChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
-    OwnershipChecker::check(&program).map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(path, &source, x.span, x.message)).collect()))?;
+    let mut sources = Vec::new();
+    let program = load_program(Path::new(path), &mut Vec::new(), &mut sources)?;
+
+    SemanticAnalyzer::check(&program).map_err(|errors| {
+        format_errors(
+            errors
+                .into_iter()
+                .map(|error| format_source_error(&sources, error.span, error.message))
+                .collect(),
+        )
+    })?;
+
+    BorrowChecker::check(&program).map_err(|errors| {
+        format_errors(
+            errors
+                .into_iter()
+                .map(|error| {
+                    let mut rendered =
+                        format_source_error(&sources, error.span, error.message);
+                    if let Some((span, label)) = error.secondary {
+                        rendered.push_str("\n");
+                        rendered.push_str(&format_source_note(&sources, span, label));
+                    }
+                    rendered
+                })
+                .collect(),
+        )
+    })?;
+
+    OwnershipChecker::check(&program).map_err(|errors| {
+        format_errors(
+            errors
+                .into_iter()
+                .map(|error| format_source_error(&sources, error.span, error.message))
+                .collect(),
+        )
+    })?;
 
     let hir = HirLowerer::lower(&program);
     let mut mir = MirLowerer::lower(&hir);
     MirOptimizer::optimize(&mut mir);
-    MirValidator::validate(&mir).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
-    MirMoveAnalyzer::analyze(&mir).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
-    MirBorrowAnalyzer::analyze(&mir).map_err(|e| format_errors(e.into_iter().map(|x| x.message).collect()))?;
+    MirValidator::validate(&mir)
+        .map_err(|errors| format_errors(errors.into_iter().map(|error| error.message).collect()))?;
+    MirMoveAnalyzer::analyze(&mir)
+        .map_err(|errors| format_errors(errors.into_iter().map(|error| error.message).collect()))?;
+    MirBorrowAnalyzer::analyze(&mir)
+        .map_err(|errors| format_errors(errors.into_iter().map(|error| error.message).collect()))?;
     Ok(mir)
 }
 
-fn load_program(path: &Path, stack: &mut Vec<PathBuf>) -> Result<Program, String> {
-    let canonical = path.canonicalize().map_err(|e| format!("rcl: cannot resolve {}: {e}", path.display()))?;
+fn load_program(
+    path: &Path,
+    stack: &mut Vec<PathBuf>,
+    sources: &mut Vec<SourceFile>,
+) -> Result<Program, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("rcl: cannot resolve {}: {e}", path.display()))?;
+
     if let Some(index) = stack.iter().position(|item| item == &canonical) {
-        let mut cycle = stack[index..].iter().map(|item| item.display().to_string()).collect::<Vec<_>>();
+        let mut cycle = stack[index..]
+            .iter()
+            .map(|item| item.display().to_string())
+            .collect::<Vec<_>>();
         cycle.push(canonical.display().to_string());
         return Err(format!("rcl: cyclic import: {}", cycle.join(" -> ")));
     }
 
-    let source = fs::read_to_string(&canonical).map_err(|e| format!("rcl: cannot read {}: {e}", canonical.display()))?;
-    let tokens = Lexer::new(&source).tokenize()
-        .map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(&canonical.display().to_string(), &source, x.span, x.message)).collect()))?;
-    let program = Parser::new(tokens).parse()
-        .map_err(|e| format_errors(e.into_iter().map(|x| format_source_error(&canonical.display().to_string(), &source, x.span, x.message)).collect()))?;
+    let source = fs::read_to_string(&canonical)
+        .map_err(|e| format!("rcl: cannot read {}: {e}", canonical.display()))?;
+    let source_id = sources.len();
+    sources.push(SourceFile {
+        path: canonical.clone(),
+        source: source.clone(),
+    });
+
+    let tokens = Lexer::with_source_id(&source, source_id)
+        .tokenize()
+        .map_err(|errors| {
+            format_errors(
+                errors
+                    .into_iter()
+                    .map(|error| format_source_error(sources, error.span, error.message))
+                    .collect(),
+            )
+        })?;
+
+    let program = Parser::new(tokens).parse().map_err(|errors| {
+        format_errors(
+            errors
+                .into_iter()
+                .map(|error| format_source_error(sources, error.span, error.message))
+                .collect(),
+        )
+    })?;
+
     stack.push(canonical.clone());
     let mut items = Vec::new();
     for item in program.items {
         match item {
             Item::Import(import) => {
-                let import_path = resolve_import_path(canonical.parent().unwrap_or(Path::new(".")), &import);
-                items.extend(load_program(&import_path, stack)?.items);
+                let import_path = resolve_import_path(
+                    canonical.parent().unwrap_or(Path::new(".")),
+                    &import.path,
+                );
+                let imported = load_program(&import_path, stack, sources)?;
+                items.extend(imported.items);
             }
             item => items.push(item),
         }
     }
     stack.pop();
+
     Ok(Program { items })
 }
 
@@ -72,41 +151,98 @@ fn resolve_import_path(base: &Path, import: &str) -> PathBuf {
 }
 
 fn format_errors(errors: Vec<String>) -> String {
-    errors.into_iter().map(|e| format!("error: {e}")).collect::<Vec<_>>().join("\n")
+    errors
+        .into_iter()
+        .map(|error| format!("error: {error}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
-fn format_source_error(path: &str, source: &str, span: rcl::lexer::Span, message: String) -> String {
-    let span = if span.line == 1 && span.column == 1 && span.length == 0 {
-        infer_error_span(source, &message).unwrap_or(span)
+fn source_for_span<'a>(sources: &'a [SourceFile], span: rcl::lexer::Span) -> Option<&'a SourceFile> {
+    sources.get(span.source_id)
+}
+
+fn span_width(span: rcl::lexer::Span) -> usize {
+    if span.end_line == span.line {
+        span.end_column
+            .saturating_sub(span.column)
+            .max(span.length)
+            .max(1)
     } else {
-        span
-    };
-    if span.line == 1 && span.column == 1 && span.length == 0 {
-        return format!("{}: {}", path, message);
+        span.length.max(1)
     }
-    let line_number = span.line.max(1);
-    let line = source.lines().nth(line_number.saturating_sub(1)).unwrap_or("");
-    let column = span.column.max(1);
-    let width = span.length.max(1);
-    let marker = format!("{}{}", " ".repeat(column.saturating_sub(1)), "^".repeat(width));
-    format!("{}:{}:{}: {}\n  {} | {}\n    | {}", path, line_number, column, message, line_number, line, marker)
 }
 
-fn infer_error_span(source: &str, message: &str) -> Option<rcl::lexer::Span> {
-    let quoted = message.split('\'').nth(1);
-    for (line_index, line) in source.lines().enumerate() {
-        let Some(column) = (if let Some(name) = quoted {
-            line.find(name)
-        } else if message.contains("array length mismatch") {
-            line.find('[')
-        } else if message.contains("type mismatch") {
-            line.find(':').or_else(|| line.find('='))
-        } else {
-            None
-        }) else { continue };
-        return Some(rcl::lexer::Span { line: line_index + 1, column: column + 1, length: 1 });
-    }
-    None
+fn format_source_error(
+    sources: &[SourceFile],
+    span: rcl::lexer::Span,
+    message: String,
+) -> String {
+    let Some(file) = source_for_span(sources, span) else {
+        return format!("<unknown source>: {}", message);
+    };
+
+    let line_number = span.line.max(1);
+    let line = file
+        .source
+        .lines()
+        .nth(line_number.saturating_sub(1))
+        .unwrap_or("");
+    let column = span.column.max(1);
+    let marker = format!(
+        "{}{}",
+        " ".repeat(column.saturating_sub(1)),
+        "^".repeat(span_width(span))
+    );
+
+    let location = if span.end_line > span.line {
+        format!(
+            "{}:{}:{}-{}:{}",
+            file.path.display(),
+            line_number,
+            column,
+            span.end_line,
+            span.end_column
+        )
+    } else {
+        format!("{}:{}:{}", file.path.display(), line_number, column)
+    };
+
+    format!(
+        "{location}: {message}\n  {line_number} | {line}\n    | {marker}"
+    )
+}
+
+fn format_source_note(
+    sources: &[SourceFile],
+    span: rcl::lexer::Span,
+    label: String,
+) -> String {
+    let Some(file) = source_for_span(sources, span) else {
+        return format!("note: <unknown source>: {label}");
+    };
+    let line_number = span.line.max(1);
+    let line = file
+        .source
+        .lines()
+        .nth(line_number.saturating_sub(1))
+        .unwrap_or("");
+    let column = span.column.max(1);
+    let marker = format!(
+        "{}{}",
+        " ".repeat(column.saturating_sub(1)),
+        "^".repeat(span_width(span))
+    );
+    format!(
+        "note: {}:{}:{}: {}\n  {} | {}\n    | {}",
+        file.path.display(),
+        line_number,
+        column,
+        label,
+        line_number,
+        line,
+        marker
+    )
 }
 
 fn llvm_path(source: &str) -> PathBuf { Path::new(source).with_extension("ll") }
