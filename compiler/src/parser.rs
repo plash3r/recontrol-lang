@@ -42,14 +42,16 @@ impl Parser {
         match self.peek().kind {
             TokenKind::Fn => self.parse_function().map(Item::Function),
             TokenKind::Struct => self.parse_struct().map(Item::Struct),
+            TokenKind::Enum => self.parse_enum().map(Item::Enum),
             TokenKind::Pub => match self.tokens.get(self.current + 1).map(|token| &token.kind) {
                 Some(TokenKind::Fn) => self.parse_function().map(Item::Function),
                 Some(TokenKind::Struct) => self.parse_struct().map(Item::Struct),
-                _ => Err(self.error_here("pub is currently supported on fn and struct items")),
+                Some(TokenKind::Enum) => self.parse_enum().map(Item::Enum),
+                _ => Err(self.error_here("pub is currently supported on fn, struct, and enum items")),
             },
             TokenKind::Impl => self.parse_impl().map(Item::Impl),
             TokenKind::Use => self.parse_import(),
-            _ => Err(self.error_here("expected use, fn, struct, impl, or pub")),
+            _ => Err(self.error_here("expected use, fn, struct, enum, impl, or pub")),
         }
     }
 
@@ -182,6 +184,42 @@ impl Parser {
         Ok(StructDef { public, name, fields, span: start.join(end) })
     }
 
+    fn parse_enum(&mut self) -> Result<EnumDef, ParseError> {
+        let visibility = if self.check(TokenKind::Pub) {
+            Some(self.advance().span)
+        } else {
+            None
+        };
+        let enum_token = self.expect(TokenKind::Enum, "expected enum")?;
+        let start = visibility.unwrap_or(enum_token.span);
+        let public = visibility.is_some();
+        let name = self.expect_identifier_token("expected enum name")?.lexeme;
+        self.skip_newlines();
+        self.expect(TokenKind::LeftBrace, "expected { after enum name")?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+            let variant = self.expect_identifier_token("expected enum variant")?;
+            variants.push(EnumVariant { name: variant.lexeme, span: variant.span });
+
+            if self.match_kind(TokenKind::Comma) {
+                self.skip_newlines();
+            } else if self.check(TokenKind::Newline) {
+                self.skip_newlines();
+            } else if !self.check(TokenKind::RightBrace) {
+                return Err(self.error_here("expected newline, comma, or } after enum variant"));
+            }
+        }
+
+        if variants.is_empty() {
+            return Err(self.error_here("enum must declare at least one variant"));
+        }
+
+        let end = self.expect(TokenKind::RightBrace, "expected } after enum variants")?.span;
+        Ok(EnumDef { public, name, variants, span: start.join(end) })
+    }
+
     fn parse_block(&mut self) -> Result<Block, ParseError> {
         let start = self.expect(TokenKind::LeftBrace, "expected {")?.span;
         self.skip_newlines();
@@ -204,6 +242,7 @@ impl Parser {
             TokenKind::While => self.parse_while(),
             TokenKind::Do => self.parse_do_while(),
             TokenKind::For => self.parse_for(),
+            TokenKind::Match => self.parse_match(),
             TokenKind::Return => self.parse_return(),
             TokenKind::LeftBrace => {
                 let block = self.parse_block()?;
@@ -306,6 +345,39 @@ impl Parser {
         Ok(Stmt::new(StmtKind::For { initializer, condition, update, body }, span))
     }
 
+    fn parse_match(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.expect(TokenKind::Match, "expected match")?.span;
+        let value = self.parse_expression()?;
+        self.skip_newlines();
+        self.expect(TokenKind::LeftBrace, "expected { after match value")?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        while !self.check(TokenKind::RightBrace) && !self.check(TokenKind::Eof) {
+            let enum_name = self.expect_identifier_token("expected enum name in match pattern")?;
+            self.expect(TokenKind::Dot, "expected . in enum match pattern")?;
+            let variant = self.expect_identifier_token("expected enum variant in match pattern")?;
+            self.expect(TokenKind::FatArrow, "expected => after match pattern")?;
+            self.skip_newlines();
+            let body = self.parse_block()?;
+            let span = enum_name.span.join(body.span);
+            arms.push(MatchArm {
+                enum_name: enum_name.lexeme,
+                variant: variant.lexeme,
+                body,
+                span,
+            });
+
+            self.skip_newlines();
+            if self.match_kind(TokenKind::Comma) {
+                self.skip_newlines();
+            }
+        }
+
+        let end = self.expect(TokenKind::RightBrace, "expected } after match arms")?.span;
+        Ok(Stmt::new(StmtKind::Match { value, arms }, start.join(end)))
+    }
+
     fn parse_return(&mut self) -> Result<Stmt, ParseError> {
         let start = self.expect(TokenKind::Return, "expected return")?.span;
         let value = if self.check(TokenKind::Newline)
@@ -314,7 +386,7 @@ impl Parser {
             || matches!(
                 self.peek().kind,
                 TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do |
-                TokenKind::For | TokenKind::Return | TokenKind::LeftBrace
+                TokenKind::For | TokenKind::Match | TokenKind::Return | TokenKind::LeftBrace
             )
         {
             None
@@ -591,7 +663,7 @@ impl Parser {
         if matches!(
             self.peek().kind,
             TokenKind::Let | TokenKind::If | TokenKind::While | TokenKind::Do | TokenKind::For |
-            TokenKind::Return | TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
+            TokenKind::Match | TokenKind::Return | TokenKind::LeftBrace | TokenKind::Identifier | TokenKind::Number |
             TokenKind::String | TokenKind::True | TokenKind::False | TokenKind::Bang | TokenKind::Minus |
             TokenKind::Plus | TokenKind::Ampersand | TokenKind::LeftBracket | TokenKind::LeftParen
         ) {
@@ -606,7 +678,7 @@ impl Parser {
                 self.skip_newlines();
                 return;
             }
-            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::Impl | TokenKind::Use | TokenKind::Pub) { return; }
+            if matches!(self.peek().kind, TokenKind::Fn | TokenKind::Struct | TokenKind::Enum | TokenKind::Impl | TokenKind::Use | TokenKind::Pub) { return; }
             if self.check(TokenKind::RightBrace) {
                 self.advance();
                 return;
@@ -692,6 +764,23 @@ mod tests {
         let program = parse("fn main() {\nlet x = 10\nif x > 0 {\nprintln(x)\n} else {\nprintln(0)\n}\nwhile x > 0 {\nprintln(x)\n}\n}");
         match &program.items[0] {
             Item::Function(function) => assert_eq!(function.body.statements.len(), 3),
+            _ => panic!("expected function"),
+        }
+    }
+
+    #[test]
+    fn parses_enum_and_match() {
+        let program = parse(
+            "enum Color { Red, Green }\nfn main(){let color:Color=Color.Red\nmatch color { Color.Red => { println(1) } Color.Green => { println(2) } }}",
+        );
+        match &program.items[0] {
+            Item::Enum(definition) => assert_eq!(definition.variants.len(), 2),
+            _ => panic!("expected enum"),
+        }
+        match &program.items[1] {
+            Item::Function(function) => {
+                assert!(matches!(function.body.statements[1].kind, StmtKind::Match { .. }));
+            }
             _ => panic!("expected function"),
         }
     }
