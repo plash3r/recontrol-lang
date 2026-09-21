@@ -67,39 +67,47 @@ it is intentionally distinct from fixed arrays.
 
 ## Enums and match
 
-Fieldless enums are first-class value types. Each declared variant has a stable
-discriminant chosen by declaration order, and native code represents the value
-without heap allocation.
+Enums are first-class value types. Each declared variant has a stable
+discriminant chosen by declaration order. Variants may be fieldless or carry
+one or more typed payload values, and constructing an enum does not require a
+heap allocation.
+
+~~~rcl
+enum Message {
+    Empty
+    Number(i32)
+    Pair(i32, i32)
+}
+
+fn main() {
+    let message: Message = Message.Pair(20, 22)
+
+    match message {
+        Message.Empty => {
+            println(0)
+        }
+        Message.Number(value) => {
+            println(value)
+        }
+        Message.Pair(left, right) => {
+            println(left + right)
+        }
+    }
+}
+~~~
+
+The constructor payload count and payload types are checked at compile time.
+A match pattern must bind exactly the number of payload values declared by that
+variant. The special binding name `_` discards a payload value.
 
 A `match` over an enum must cover every declared variant exactly once.
 Unknown variants and duplicate arms are compile-time errors. A non-exhaustive
 match is also a compile-time error, so adding a new enum variant cannot silently
 fall through at runtime.
 
-Example:
-
-~~~rcl
-enum Color {
-    Red
-    Green
-}
-
-fn main() {
-    let color: Color = Color.Green
-
-    match color {
-        Color.Red => {
-            println("red")
-        }
-        Color.Green => {
-            println("green")
-        }
-    }
-}
-~~~
-
-Payload-carrying variants and generic `Option`/`Result` are later language
-layers; the current fieldless representation is intentionally kept simple.
+Generic enum parameters are the next type-system layer. Once those are
+monomorphized, the same payload representation is intended to power
+`Option<T>` and `Result<T, E>`.
 
 ## References and ownership
 
