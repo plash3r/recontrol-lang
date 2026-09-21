@@ -379,7 +379,7 @@ impl HirLowerer {
                 let object = self.lower_expr(object);
                 let index = self.lower_expr(index);
                 let ty = match &object.ty {
-                    Type::Array(inner) => (**inner).clone(),
+                    Type::Array { element, .. } => (**element).clone(),
                     Type::Str => Type::Char,
                     _ => Type::Unknown,
                 };
