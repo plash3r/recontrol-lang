@@ -99,6 +99,7 @@ pub enum Terminator {
 struct Builder {
     blocks: Vec<BasicBlock>,
     current: BasicBlockId,
+    loop_targets: Vec<(BasicBlockId, BasicBlockId)>,
 }
 
 impl Builder {
@@ -110,6 +111,7 @@ impl Builder {
                 terminator: Terminator::Unreachable,
             }],
             current: 0,
+            loop_targets: Vec::new(),
         }
     }
 
@@ -383,7 +385,8 @@ impl MirLowerer {
                 }
             }
             HirStmt::Block(block) => Self::collect_block_locals(block, locals),
-            HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Return(_) => {}
+            HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Return(_) |
+            HirStmt::Break | HirStmt::Continue => {}
         }
     }
 
@@ -583,6 +586,20 @@ impl MirLowerer {
                 let next = builder.new_block();
                 builder.switch_to(next);
             }
+            HirStmt::Break => {
+                let target = builder.loop_targets.last().map(|(_, break_target)| *break_target)
+                    .expect("semantic analysis guarantees break is inside a loop");
+                builder.finish_block(Terminator::Goto(target));
+                let next = builder.new_block();
+                builder.switch_to(next);
+            }
+            HirStmt::Continue => {
+                let target = builder.loop_targets.last().map(|(continue_target, _)| *continue_target)
+                    .expect("semantic analysis guarantees continue is inside a loop");
+                builder.finish_block(Terminator::Goto(target));
+                let next = builder.new_block();
+                builder.switch_to(next);
+            }
             HirStmt::Block(block) => Self::lower_block(builder, block, locals),
             HirStmt::If { condition, then_branch, else_branch } => {
                 let then_block = builder.new_block();
@@ -626,7 +643,9 @@ impl MirLowerer {
                 });
 
                 builder.switch_to(body_block);
+                builder.loop_targets.push((head, exit));
                 Self::lower_block(builder, body, locals);
+                builder.loop_targets.pop();
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(head));
                 }
@@ -639,7 +658,9 @@ impl MirLowerer {
                 builder.finish_block(Terminator::Goto(body_block));
 
                 builder.switch_to(body_block);
+                builder.loop_targets.push((condition_block, exit));
                 Self::lower_block(builder, body, locals);
+                builder.loop_targets.pop();
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(condition_block));
                 }
@@ -736,7 +757,9 @@ impl MirLowerer {
                 }
 
                 builder.switch_to(body_block);
+                builder.loop_targets.push((update_block, exit));
                 Self::lower_block(builder, body, locals);
+                builder.loop_targets.pop();
                 if matches!(builder.blocks[builder.current].terminator, Terminator::Unreachable) {
                     builder.finish_block(Terminator::Goto(update_block));
                 }
