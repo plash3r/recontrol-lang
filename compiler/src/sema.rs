@@ -33,8 +33,14 @@ struct StructInfo {
 }
 
 #[derive(Debug, Clone)]
+struct EnumVariantInfo {
+    name: String,
+    payload: Vec<Type>,
+}
+
+#[derive(Debug, Clone)]
 struct EnumInfo {
-    variants: Vec<String>,
+    variants: Vec<EnumVariantInfo>,
     public: bool,
     source_id: usize,
 }
@@ -180,15 +186,18 @@ impl SemanticAnalyzer {
                         continue;
                     }
 
-                    let mut variants = Vec::new();
+                    let mut variants = Vec::<EnumVariantInfo>::new();
                     for variant in &definition.variants {
-                        if variants.iter().any(|name| name == &variant.name) {
+                        if variants.iter().any(|existing| existing.name == variant.name) {
                             self.error_at(
                                 variant.span,
                                 format!("duplicate enum variant '{}.{}'", definition.name, variant.name),
                             );
                         } else {
-                            variants.push(variant.name.clone());
+                            variants.push(EnumVariantInfo {
+                                name: variant.name.clone(),
+                                payload: variant.payload.iter().map(Type::from_ref).collect(),
+                            });
                         }
                     }
 
