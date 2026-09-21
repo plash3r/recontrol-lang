@@ -1,0 +1,7 @@
+use "left.rcl" as left
+use "right.rcl" as right
+
+fn main() {
+    println(left.value())
+    println(right.value())
+}
