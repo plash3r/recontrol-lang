@@ -17,6 +17,8 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Check
         run: cargo check --workspace
+      - name: Formatter check
+        run: cargo run -p rcl -- fmt --check examples/hello.rcl
 
   llvm:
     runs-on: ubuntu-latest
