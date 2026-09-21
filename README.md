@@ -217,6 +217,23 @@ fn main() {
 The compiler rejects wrong constructor payloads, wrong pattern binding counts,
 unknown variants, duplicate arms, and non-exhaustive enum matches.
 
+Rust-like loop control is available without extra syntax:
+
+~~~rcl
+let mut attempts: i32 = 0
+
+loop {
+    attempts += 1
+    if attempts < 3 {
+        continue
+    }
+    break
+}
+~~~
+
+`break` and `continue` are checked at compile time and target the innermost
+`while`, `do while`, `for`, or `loop`.
+
 ## Compiler pipeline
 
 RCL source -> Lexer -> Parser -> AST -> Semantic analysis -> Borrow Checker -> Ownership / Move Checker -> HIR -> MIR -> MIR validation -> MIR Move/Dataflow -> MIR Borrow/Dataflow -> MIR optimization -> LLVM IR -> clang/LLVM -> native executable.
