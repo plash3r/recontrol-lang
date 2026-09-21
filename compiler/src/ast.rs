@@ -121,6 +121,7 @@ pub enum StmtKind {
     Continue,
     If { condition: Expr, then_branch: Block, else_branch: Option<Box<Stmt>> },
     While { condition: Expr, body: Block },
+    Loop { body: Block },
     DoWhile { body: Block, condition: Expr },
     For { initializer: Option<Box<Stmt>>, condition: Option<Expr>, update: Option<Expr>, body: Block },
     Match { value: Expr, arms: Vec<MatchArm> },
