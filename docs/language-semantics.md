@@ -65,6 +65,42 @@ Indexing is bounds checked by the native runtime.
 A future dynamically sized slice type will carry both a pointer and a length;
 it is intentionally distinct from fixed arrays.
 
+## Enums and match
+
+Fieldless enums are first-class value types. Each declared variant has a stable
+discriminant chosen by declaration order, and native code represents the value
+without heap allocation.
+
+A `match` over an enum must cover every declared variant exactly once.
+Unknown variants and duplicate arms are compile-time errors. A non-exhaustive
+match is also a compile-time error, so adding a new enum variant cannot silently
+fall through at runtime.
+
+Example:
+
+~~~rcl
+enum Color {
+    Red
+    Green
+}
+
+fn main() {
+    let color: Color = Color.Green
+
+    match color {
+        Color.Red => {
+            println("red")
+        }
+        Color.Green => {
+            println("green")
+        }
+    }
+}
+~~~
+
+Payload-carrying variants and generic `Option`/`Result` are later language
+layers; the current fieldless representation is intentionally kept simple.
+
 ## References and ownership
 
 A shared reference `&T` is copyable.
