@@ -47,6 +47,7 @@ impl Env {
 pub struct OwnershipChecker {
     functions: HashMap<(usize, String), FunctionSig>,
     methods: HashMap<(usize, String, String), FunctionSig>,
+    enums: HashMap<(usize, String), ()>,
     imports: HashMap<usize, Vec<(Option<String>, usize)>>,
     errors: Vec<OwnershipError>,
 }
@@ -56,6 +57,7 @@ impl OwnershipChecker {
         let mut checker = Self {
             functions: HashMap::new(),
             methods: HashMap::new(),
+            enums: HashMap::new(),
             imports: HashMap::new(),
             errors: Vec::new(),
         };
@@ -69,7 +71,7 @@ impl OwnershipChecker {
                         checker.check_function(function, Some(&implementation.type_name));
                     }
                 }
-                Item::Struct(_) | Item::Import(_) => {}
+                Item::Struct(_) | Item::Enum(_) | Item::Import(_) => {}
             }
         }
 
@@ -121,6 +123,12 @@ impl OwnershipChecker {
                             },
                         );
                     }
+                }
+                Item::Enum(definition) => {
+                    self.enums.insert(
+                        (definition.span.source_id, definition.name.clone()),
+                        (),
+                    );
                 }
                 Item::Struct(_) => {}
             }
@@ -193,6 +201,12 @@ impl OwnershipChecker {
                 self.check_block(body, env);
                 env.pop();
             }
+            StmtKind::Match { value, arms } => {
+                self.expr(value, env, false);
+                for arm in arms {
+                    self.check_block(&arm.body, env);
+                }
+            }
             StmtKind::Block(block) => self.check_block(block, env),
         }
     }
@@ -251,7 +265,14 @@ impl OwnershipChecker {
                 value_ty
             }
             ExprKind::Call { callee, args } => self.call(callee, args, env),
-            ExprKind::Member { object, .. } => self.expr(object, env, false),
+            ExprKind::Member { object, .. } => {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    if self.resolve_enum(expression.span.source_id, name) {
+                        return Type::Named(name.clone());
+                    }
+                }
+                self.expr(object, env, false)
+            },
             ExprKind::Postfix { expr, .. } => self.expr(expr, env, false),
             ExprKind::StructLiteral { name, fields } => {
                 for (_, value) in fields {
@@ -282,6 +303,17 @@ impl OwnershipChecker {
                 }
             }
         }
+    }
+
+    fn resolve_enum(&self, source_id: usize, name: &str) -> bool {
+        if self.enums.contains_key(&(source_id, name.to_string())) {
+            return true;
+        }
+        self.imports.get(&source_id)
+            .into_iter()
+            .flatten()
+            .filter(|(alias, _)| alias.is_none())
+            .any(|(_, target)| self.enums.contains_key(&(*target, name.to_string())))
     }
 
     fn namespace_target(&self, source_id: usize, alias: &str) -> Option<usize> {
