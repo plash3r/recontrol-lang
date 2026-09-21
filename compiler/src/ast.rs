@@ -7,6 +7,7 @@ pub struct Program { pub items: Vec<Item> }
 pub enum Item {
     Function(Function),
     Struct(StructDef),
+    Enum(EnumDef),
     Impl(ImplBlock),
     Import(Import),
 }
@@ -16,6 +17,7 @@ impl Item {
         match self {
             Item::Function(value) => value.span,
             Item::Struct(value) => value.span,
+            Item::Enum(value) => value.span,
             Item::Impl(value) => value.span,
             Item::Import(value) => value.span,
         }
@@ -71,6 +73,28 @@ pub struct Field {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub public: bool,
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub enum_name: String,
+    pub variant: String,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub statements: Vec<Stmt>,
     pub span: Span,
@@ -95,6 +119,7 @@ pub enum StmtKind {
     While { condition: Expr, body: Block },
     DoWhile { body: Block, condition: Expr },
     For { initializer: Option<Box<Stmt>>, condition: Option<Expr>, update: Option<Expr>, body: Block },
+    Match { value: Expr, arms: Vec<MatchArm> },
     Block(Block),
 }
 
