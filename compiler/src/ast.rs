@@ -2,7 +2,7 @@
 pub struct Program { pub items: Vec<Item> }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Item { Function(Function), Struct(StructDef), Impl(ImplBlock) }
+pub enum Item { Function(Function), Struct(StructDef), Impl(ImplBlock), Import(String) }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock { pub type_name: String, pub methods: Vec<Function> }
@@ -75,7 +75,7 @@ pub enum PostfixOp { Increment, Decrement }
 pub enum AssignOp { Assign, Add, Subtract, Multiply, Divide, Modulo }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef { pub name: String, pub reference: ReferenceKind }
+pub struct TypeRef { pub name: String, pub reference: ReferenceKind, pub array_len: Option<usize> }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind { Value, Shared, Mutable }

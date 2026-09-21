@@ -1,4 +1,4 @@
-use crate::hir::{HirExpr, HirExprKind, HirFunction, HirProgram, HirStmt, LocalId};
+use crate::hir::{HirExpr, HirExprKind, HirFunction, HirProgram, HirStmt, LocalId, BUILTIN_LEN_ID, BUILTIN_TYPEOF_ID};
 use crate::ast::{AssignOp, BinaryOp, Literal, PostfixOp, UnaryOp};
 use crate::types::Type;
 
@@ -7,6 +7,13 @@ pub type BasicBlockId = usize;
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirProgram {
     pub functions: Vec<MirFunction>,
+    pub structs: Vec<MirStruct>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirStruct {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +126,10 @@ impl MirLowerer {
     pub fn lower(program: &HirProgram) -> MirProgram {
         MirProgram {
             functions: program.functions.iter().map(Self::lower_function).collect(),
+            structs: program.structs.iter().map(|structure| MirStruct {
+                name: structure.name.clone(),
+                fields: structure.fields.iter().map(|field| (field.name.clone(), field.ty.clone())).collect(),
+            }).collect(),
         }
     }
 
@@ -250,7 +261,9 @@ impl MirLowerer {
                 mutable: matches!(param.ty, Type::Reference { mutable: true, .. }),
             });
         }
-        for local in &function.body.locals {
+        let mut all_locals = Vec::new();
+        Self::collect_block_locals(&function.body, &mut all_locals);
+        for local in &all_locals {
             if !locals.iter().any(|existing: &MirLocal| existing.id == local.id) {
                 locals.push(MirLocal {
                     id: local.id,
@@ -281,6 +294,33 @@ impl MirLowerer {
         };
         Self::finalize_temporaries(&mut result, temp_start);
         result
+    }
+
+    fn collect_block_locals(block: &crate::hir::HirBlock, locals: &mut Vec<crate::hir::HirLocal>) {
+        locals.extend(block.locals.iter().cloned());
+        for statement in &block.statements {
+            Self::collect_stmt_locals(statement, locals);
+        }
+    }
+
+    fn collect_stmt_locals(statement: &HirStmt, locals: &mut Vec<crate::hir::HirLocal>) {
+        match statement {
+            HirStmt::If { then_branch, else_branch, .. } => {
+                Self::collect_block_locals(then_branch, locals);
+                if let Some(else_branch) = else_branch {
+                    Self::collect_stmt_locals(else_branch, locals);
+                }
+            }
+            HirStmt::While { body, .. } | HirStmt::DoWhile { body, .. } => Self::collect_block_locals(body, locals),
+            HirStmt::For { initializer, body, .. } => {
+                if let Some(initializer) = initializer {
+                    Self::collect_stmt_locals(initializer, locals);
+                }
+                Self::collect_block_locals(body, locals);
+            }
+            HirStmt::Block(block) => Self::collect_block_locals(block, locals),
+            HirStmt::Let { .. } | HirStmt::Expr(_) | HirStmt::Return(_) => {}
+        }
     }
 
     fn lower_block(builder: &mut Builder, block: &crate::hir::HirBlock, locals: &mut Vec<MirLocal>) {
@@ -314,7 +354,11 @@ impl MirLowerer {
                     place: Place::Local(temp),
                     rvalue,
                 });
-                Operand::Move(Place::Local(temp))
+                    if expr.ty.is_copy() {
+                        Operand::Copy(Place::Local(temp))
+                    } else {
+                        Operand::Move(Place::Local(temp))
+                    }
             }
         }
     }
@@ -349,10 +393,20 @@ impl MirLowerer {
                 right: Self::lower_operand(builder, locals, right),
             },
             HirExprKind::Assignment { target, op, value } => Self::lower_assignment_rvalue(builder, locals, target, *op, value),
-            HirExprKind::Call { callee, args } => Rvalue::Call {
-                callee: Self::lower_operand(builder, locals, callee),
-                args: args.iter().map(|arg| Self::lower_operand(builder, locals, arg)).collect(),
-            },
+            HirExprKind::Call { callee, args } => {
+                let inspection_call = matches!(&callee.kind, HirExprKind::Function(id) if *id == BUILTIN_TYPEOF_ID || *id == BUILTIN_LEN_ID);
+                Rvalue::Call {
+                    callee: Self::lower_operand(builder, locals, callee),
+                    args: args.iter().map(|arg| {
+                        if inspection_call {
+                            if let HirExprKind::Local(local) = arg.kind {
+                                return Operand::Copy(Place::Local(local));
+                            }
+                        }
+                        Self::lower_operand(builder, locals, arg)
+                    }).collect(),
+                }
+            }
             HirExprKind::Member { object, name } => {
                 let place = Self::lower_place(builder, locals, object);
                 Rvalue::Use(Operand::Copy(Place::Field {
@@ -506,8 +560,18 @@ impl MirLowerer {
 
                 builder.switch_to(update_block);
                 if let Some(update) = update {
-                    let rvalue = Self::lower_rvalue(builder, locals, update);
-                    builder.statement(MirStatement::Evaluate(rvalue));
+                    let (place, rvalue) = if let HirExprKind::Postfix { expr: target, op } = &update.kind {
+                        (Some(Self::lower_place(builder, locals, target)), Self::lower_postfix_rvalue(builder, locals, target, *op))
+                    } else if let HirExprKind::Assignment { target, op, value } = &update.kind {
+                        (Some(Self::lower_place(builder, locals, target)), Self::lower_assignment_rvalue(builder, locals, target, *op, value))
+                    } else {
+                        (None, Self::lower_rvalue(builder, locals, update))
+                    };
+                    if let Some(place) = place {
+                        builder.statement(MirStatement::Assign { place, rvalue });
+                    } else {
+                        builder.statement(MirStatement::Evaluate(rvalue));
+                    }
                 }
                 builder.finish_block(Terminator::Goto(head));
                 builder.switch_to(exit);

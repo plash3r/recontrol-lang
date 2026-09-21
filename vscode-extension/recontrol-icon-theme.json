@@ -1,0 +1,14 @@
+{
+  "$schema": "vscode://schemas/icon-theme",
+  "iconDefinitions": {
+    "_rcl": {
+      "iconPath": "./icons/recontrol.svg"
+    }
+  },
+  "fileExtensions": {
+    "rcl": "_rcl"
+  },
+  "languageIds": {
+    "recontrol": "_rcl"
+  }
+}
