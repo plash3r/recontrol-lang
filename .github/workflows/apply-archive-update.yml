@@ -28,7 +28,7 @@ jobs:
             echo "No payload to apply"
             exit 0
           fi
-          cat .update_payload.part* > /tmp/update_payload.b64
+          cat             .update_payload.part01             .update_payload.part02             .update_payload.part03             .update_payload.part04             .update_payload.part05             .update_payload.part05a             .update_payload.part05aa             .update_payload.part05b             .update_payload.part06 > /tmp/update_payload.b64
           base64 --decode /tmp/update_payload.b64 > /tmp/update_payload.tar.gz
           tar -tzf /tmp/update_payload.tar.gz
           tar -xzf /tmp/update_payload.tar.gz -C .
