@@ -32,7 +32,11 @@ impl LlvmBackend {
             writeln!(module, "%{} = type {{ {} }}", structure.name, fields).unwrap();
         }
         for definition in &program.enums {
-            writeln!(module, "%{} = type {{ i32 }}", definition.name).unwrap();
+            let mut fields = vec!["i32".to_string()];
+            for variant in &definition.variants {
+                fields.extend(variant.payload.iter().map(llvm_type));
+            }
+            writeln!(module, "%{} = type {{ {} }}", definition.name, fields.join(", ")).unwrap();
         }
         if !program.structs.is_empty() || !program.enums.is_empty() { module.push('\n'); }
 
@@ -184,18 +188,47 @@ impl<'a> Cx<'a> {
                 }
                 Ok(value)
             }
-            Rvalue::EnumVariant { name, discriminant } => {
-                if !self.program.enums.iter().any(|definition| definition.name == *name) {
+            Rvalue::EnumVariant { name, discriminant, values } => {
+                let Some(definition) = self.program.enums.iter()
+                    .find(|definition| definition.name == *name)
+                else {
                     return self.err_result("unknown enum variant");
+                };
+                let Some(variant) = definition.variants.get(*discriminant) else {
+                    return self.err_result("invalid enum discriminant");
+                };
+                if variant.payload.len() != values.len() {
+                    return self.err_result("enum payload arity mismatch during code generation");
                 }
-                let next = self.tmp();
+
+                let tag = self.tmp();
                 writeln!(
                     self.pending,
-                    "  %{next} = insertvalue %{} zeroinitializer, i32 {}, 0",
+                    "  %{tag} = insertvalue %{} zeroinitializer, i32 {}, 0",
                     name,
                     discriminant,
                 ).unwrap();
-                Ok(format!("%{next}"))
+                let mut rendered_enum = format!("%{tag}");
+                let base_index = 1 + definition.variants.iter()
+                    .take(*discriminant)
+                    .map(|candidate| candidate.payload.len())
+                    .sum::<usize>();
+                for (field_index, operand) in values.iter().enumerate() {
+                    let rendered = self.operand(operand)?;
+                    let field_type = &variant.payload[field_index];
+                    let next = self.tmp();
+                    writeln!(
+                        self.pending,
+                        "  %{next} = insertvalue %{} {}, {} {}, {}",
+                        name,
+                        rendered_enum,
+                        llvm_type(field_type),
+                        rendered,
+                        base_index + field_index,
+                    ).unwrap();
+                    rendered_enum = format!("%{next}");
+                }
+                Ok(rendered_enum)
             }
             Rvalue::EnumTag { operand } => {
                 let value = self.operand(operand)?;
@@ -208,6 +241,39 @@ impl<'a> Cx<'a> {
                 }
                 let next = self.tmp();
                 writeln!(self.pending, "  %{next} = extractvalue %{} {}, 0", name, value).unwrap();
+                Ok(format!("%{next}"))
+            }
+            Rvalue::EnumPayload { operand, discriminant, field_index } => {
+                let value = self.operand(operand)?;
+                let ty = self.operand_type(operand)?;
+                let Type::Named(name) = ty else {
+                    return self.err_result("enum payload requested from a non-enum value");
+                };
+                let Some(definition) = self.program.enums.iter()
+                    .find(|definition| definition.name == name)
+                else {
+                    return self.err_result("enum payload requested from a non-enum named type");
+                };
+                let Some(variant) = definition.variants.get(*discriminant) else {
+                    return self.err_result("invalid enum discriminant");
+                };
+                let Some(field_type) = variant.payload.get(*field_index) else {
+                    return self.err_result("invalid enum payload field");
+                };
+                let struct_index = 1 + definition.variants.iter()
+                    .take(*discriminant)
+                    .map(|candidate| candidate.payload.len())
+                    .sum::<usize>()
+                    + field_index;
+                let next = self.tmp();
+                writeln!(
+                    self.pending,
+                    "  %{next} = extractvalue %{} {}, {}",
+                    name,
+                    value,
+                    struct_index,
+                ).unwrap();
+                let _ = field_type;
                 Ok(format!("%{next}"))
             }
             Rvalue::Array(values) => {
@@ -586,6 +652,11 @@ impl<'a> Cx<'a> {
             Rvalue::Call{callee:Operand::Function(id),..}=>self.signature(*id).ok().map(|(_,ret,_)|ret),
             Rvalue::EnumVariant{name,..}=>Some(Type::Named(name.clone())),
             Rvalue::EnumTag{..}=>Some(Type::I32),
+            Rvalue::EnumPayload{operand,discriminant,field_index}=>{
+                let Type::Named(name)=self.static_operand_type(operand,f)? else { return None; };
+                let definition=self.program.enums.iter().find(|definition| definition.name==name)?;
+                definition.variants.get(*discriminant)?.payload.get(*field_index).cloned()
+            }
             _=>None,
         }
     }
