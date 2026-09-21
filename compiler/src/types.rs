@@ -28,6 +28,12 @@ impl Type {
             other => Type::Named(other.into()),
         };
 
+        let base = if type_ref.array_len.is_some() {
+            Type::Array(Box::new(base))
+        } else {
+            base
+        };
+
         match type_ref.reference {
             ReferenceKind::Value => base,
             ReferenceKind::Shared => Type::Reference { mutable: false, inner: Box::new(base) },

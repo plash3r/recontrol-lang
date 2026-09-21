@@ -111,8 +111,45 @@ hello/
 fn main() {
     let message: str = "Hello, Recontrol!"
     println(message)
+    println(typeof(message))
 }
 ~~~
+
+`typeof(value)` returns the compile-time type name as a string, such as `"str"`, `"i32"`, or `"bool"`.
+
+`len(array)` returns the number of elements in an array as an `i32` value.
+
+Arrays can be printed directly:
+
+~~~rcl
+let values = [1, 2, 3]
+println(values)
+~~~
+
+This prints `1 2 3` for arrays with `str`, `i8`, or `i32` elements.
+
+`print` and `println` accept format strings with `%d`, `%i`, `%s`, or `{}` placeholders:
+
+~~~rcl
+println("sum = %d\n", sum)
+println("type: {}, value: {}", typeof(sum), sum)
+~~~
+
+String escapes include `\n`, `\r`, `\t`, `\\`, and `\"`.
+
+## Local libraries
+
+Source files can import other RCL files with a relative `use` declaration. The `.rcl` extension is optional:
+
+~~~rcl
+use "math.rcl"
+
+fn main() {
+    println(add(2, 3))
+}
+~~~
+
+`math.rcl` is compiled as part of the same program, so its functions, structs, and `impl` blocks are available to the importing file. Imports are resolved relative to the file containing the `use` declaration. Cyclic imports and missing files are reported as compiler errors.
 
 ## Compiler pipeline
 
